@@ -8,7 +8,7 @@
 //! the anisette server and its state, which `.atelier` keeps too.
 //!
 //! In `.atelier/apple/<hash of the Apple ID>/sign-in.plist`, by the
-//! signing key, so the Apple ID isn't written anywhere. It goes with
+//! signing key, so that neither file names the Apple ID. It goes with
 //! `--forget`, once Apple refuses it, and some minutes before Apple says
 //! it ends.
 //!

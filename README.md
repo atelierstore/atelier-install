@@ -25,7 +25,7 @@ Every step runs in one App Store app, as one program. There's no computer at any
 - **The iPhone pairs with itself from inside rootshell's sandbox.** The program sends iOS 27's Bonjour announcement for a pairable host as an mDNS packet it builds itself.
 - **The whole stack runs as WASI Preview 1:** idevice for the iPhone's services, and isideload for Apple's sign-in and the signing. That means one thread and no async runtime, with sockets and TLS lent by rootshell.
 - **It keeps working while the web view it runs in could be suspended.** It checks in with rootshell as it computes.
-- **A run that stops picks up where it left off.** The next run signs in with Apple's token, not the password.
+- **A run that stops picks up where it left off,** and the next sign-in uses Apple's token instead of the password, except for an app that takes the sign-in.
 - **Apps declare in their Info.plist what they take from it,** such as the pairing or the signing identity. It hands over nothing else, and runs nothing that comes with the IPA.
 
 ## How it works
@@ -43,12 +43,12 @@ Every step runs in one App Store app, as one program. There's no computer at any
 4. **The sign-in** (`src/apple.rs`, `src/route.rs`, `src/token.rs`).
    - The program signs in with GrandSlam's SRP, using the Apple ID and password, and Apple's two-factor code when Apple asks for one.
    - It goes through an anisette v3 server from Atelier's list. Each server's provisioned state is kept, so Apple sees the same machine every time.
-   - It then gets the app token for Xcode's developer services, `com.apple.gs.xcode.auth`. The next run signs in with that token.
+   - It then gets the app token for Xcode's developer services, `com.apple.gs.xcode.auth`. The next run signs in with that token, unless the app it installs takes the sign-in.
 5. **The signing** (`src/apple.rs`).
    - Through Xcode's developer services, the program gets the team, registers the iPhone by its UDID, and gets a development certificate (a new one, or one it made before, with the key it kept). It then gets the app's App ID and its provisioning profile, which the app's extensions are signed with too, as Atelier signs them.
    - isideload then signs the bundle with apple-codesign-quick: the code directories, the entitlements from the profile, and a CMS signature with the certificate.
 6. **The install** (`src/phone.rs`). AFC uploads the signed bundle to `PublicStaging`, and installation_proxy installs it with `PackageType` `Developer`, as Xcode does.
-7. **The hand-off** (`src/handoff.rs`, `src/certificate.rs`). house_arrest opens the app's container, and the program writes what the app's Info.plist declares, at the paths it declares.
+7. **The hand-off** (`src/handoff.rs`, `src/certificate.rs`). house_arrest opens the app's container, and the program writes what the app's Info.plist declares, at the paths it declares: this iPhone's pairing, the signing identity (the certificate, its key and the Apple ID's sign-in), or both.
 
 ## The tricks that made it work
 
@@ -105,9 +105,11 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
 
 ## Your Apple ID
 
-Everything stays on the iPhone. The password only goes to Apple, and to an app that takes the sign-in, such as Atelier, once you've said yes.
+Everything stays on the iPhone. The password goes to Apple, and to the app being installed only when that app takes the sign-in (see [what your app takes](#for-app-developers-what-your-app-takes)). Atelier takes it, and the program says so before you type the password. Any other app gets it only once you've said yes.
 
-After a sign-in, the program keeps Apple's token for its developer services, never the password, so that its next run signs in without the password or a code. The token is kept under a hash of the Apple ID, and the Apple ID itself isn't written anywhere. The token is deleted when Apple refuses it, 15 minutes before Apple says it ends, or with `--forget`. A run for an app that takes the sign-in still asks for the password, because that app takes it too. `--sign-in` asks for it as well, because it checks it.
+After a sign-in, the program keeps Apple's token for its developer services, not the password, so that its next run signs in without the password or a code. The token is kept under a hash of the Apple ID, so its file doesn't name the Apple ID. The token is deleted when Apple refuses it, 15 minutes before Apple says it ends, or with `--forget`. `--sign-in` still asks for the password, because it checks it.
+
+A run for an app that takes the sign-in asks for the password whenever it signs in, because the app takes it too. From the signing until the app has them, the Apple ID and password wait in `.atelier` with the signed app, so that a run that stops can still hand them over. They're deleted once the app has them, a day after the signing, with `--redo`, or with `--forget`.
 
 The program keeps the following in `.atelier`, in rootshell's folder, which Files doesn't show:
 
@@ -116,7 +118,7 @@ The program keeps the following in `.atelier`, in rootshell's folder, which File
 - the signing key that Apple made a certificate for
 - Apple's token
 - each anisette server's state
-- an install that a run stopped before finishing
+- an install that a run stopped before finishing, with the sign-in when the app takes it
 
 `--forget` deletes all of it. Each run's steps and errors go to `atelier-install.log` in rootshell's folder, never with the Apple ID, its password or a code.
 
@@ -138,7 +140,7 @@ An app declares in its Info.plist what it takes once it's installed, and where i
 
 - **What it can declare.** Either entry can be left out, and each path must be inside the app's Documents, Library or tmp folder.
 - **The pairing** is an RPPairing file, as idevice writes it.
-- **The signing identity** is the certificate the app was signed with, its key, and the sign-in: the Apple ID and password, the iPhone's UDID, and the anisette server and state that the sign-in went through. With it, the app signs in as the same machine, and Apple doesn't ask for a code again (`src/certificate.rs`).
+- **The signing identity** is the Apple ID's sign-in and the certificate the app was signed with: the Apple ID and password, the certificate and its key, the iPhone's UDID, and the anisette server and state that the sign-in went through. With it, the app signs in to Apple as you, as the same machine, so Apple doesn't ask for a code again, and signs with the same certificate (`src/certificate.rs`).
 - **How it's written.** The program writes what's declared through house_arrest, and nothing else. Nothing that comes with an IPA runs in the program that holds the pairing and the password.
 - **Your yes comes first.** For any app but Atelier, the program first says what each item lets the app do, and asks.
 - **An app that declares nothing gets nothing.** `--pairing-to` hands the pairing to an app that reads it somewhere without declaring it.
