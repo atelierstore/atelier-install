@@ -1,21 +1,28 @@
 //! What this program hands Atelier with the pairing, so that Atelier opens
-//! signed in and signs with the certificate this program signed it with
+//! signed in and signs with the certificate this program signed it with.
 //! The certificate and its key, because a free Apple ID only gets
 //! 2, and the program and Atelier shouldn't take both. The sign-in: the
-//! Apple ID and password as typed here, the iPhone registered with them,
-//! and the anisette server and state the sign-in went through, so that
-//! Atelier signs in as the same machine and Apple doesn't ask for a code
-//! again.
+//! Apple ID as typed here, what it signs in with, the iPhone registered
+//! with it, and the anisette server and state the sign-in went through, so
+//! that Atelier signs in as the same machine and Apple doesn't ask for a
+//! code again.
+//!
+//! What it signs in with depends on the format the app takes ([`Format`]):
+//! the password, in version 1, or Apple's token for its developer services
+//! in the password's place, in version 2 (token.rs), so that the password
+//! only goes to Apple.
 //!
 //! None of it leaves the iPhone. It goes from this program to Atelier's
 //! container through house_arrest, into its Caches folder, which no backup
-//! takes, and Atelier moves it on its first launch, the password into its
-//! Keychain. It only goes to an Atelier whose Info.plist says it takes it
-//! ([`DECLARATION`]): one that doesn't would keep the password and the key
-//! in its Caches. Atelier's side is in atelierstore/Atelier.
+//! takes, and Atelier moves it on its first launch, the password or the
+//! token into its Keychain. It only goes to an Atelier whose Info.plist
+//! says it takes it ([`DECLARATION`], or handoff.rs's): one that doesn't
+//! would keep the password or the token, and the key, in its Caches.
+//! Atelier's side is in atelierstore/Atelier.
 
 use std::io;
 use std::path::Path;
+use std::time::{Duration, UNIX_EPOCH};
 
 use isideload::anisette::remote_v3::ANISETTE_STATE_KEY;
 use isideload::dev::certificates::{CertificatesApi, DevelopmentCertificate};
@@ -29,12 +36,43 @@ use rsa::pkcs8::DecodePrivateKey;
 use sha2::{Digest, Sha256};
 use x509_cert::der::Decode;
 
+use crate::token::Token;
+
 /// Where the hand-off goes in Atelier's container.
 pub const PATH: &str = "Library/Caches/Installer/certificate.plist";
-/// The key in Atelier's Info.plist that says it takes the hand-off, with
-/// the version of the format it takes: [`VERSION`], this one.
+/// The key in Atelier's Info.plist that says it takes the hand-off, from
+/// its builds before `SideloadHandOff` (handoff.rs), with the version of
+/// the format it takes: [`VERSION`], the first, with the password.
 pub const DECLARATION: &str = "AtelierInstallerHandOff";
 pub const VERSION: i64 = 1;
+
+/// The hand-off's formats, by what the app signs in with.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// Version 1: the password.
+    #[default]
+    Password,
+    /// Version 2: Apple's token for its developer services, with the
+    /// account's adsid, in the password's place.
+    Token,
+}
+
+impl Format {
+    pub fn version(self) -> i64 {
+        match self {
+            Format::Password => 1,
+            Format::Token => 2,
+        }
+    }
+
+    pub fn of_version(version: i64) -> Option<Format> {
+        match version {
+            1 => Some(Format::Password),
+            2 => Some(Format::Token),
+            _ => None,
+        }
+    }
+}
 
 /// Whether the app whose Info.plist is `info` takes this hand-off.
 pub fn taken_by(info: &plist::Dictionary) -> bool {
@@ -60,12 +98,12 @@ pub struct Certificate {
     pub private_key: Vec<u8>,
 }
 
-/// What Atelier signs in with. Not `Debug`, so that the password can't
-/// end up in the log.
+/// What Atelier signs in with. Not `Debug`, so that the password and the
+/// token can't end up in the log.
 pub struct SignIn {
     /// As typed here, lowercased.
     pub apple_id: String,
-    pub password: String,
+    pub secret: Secret,
     /// The iPhone this program registered with the Apple ID's team.
     pub udid: String,
     /// The anisette server the sign-in went through, with isideload's
@@ -73,6 +111,12 @@ pub struct SignIn {
     pub anisette_server: String,
     /// isideload's state for that server: its `anisette_state`, a plist.
     pub anisette_state: Vec<u8>,
+}
+
+/// The password, or Apple's token: what the format the app takes holds.
+pub enum Secret {
+    Password(String),
+    Token(Token),
 }
 
 /// isideload's anisette state in `folder`, its storage for one server.
@@ -84,8 +128,14 @@ impl Certificate {
     /// The hand-off file: an XML plist with the certificate's `teamID`,
     /// `machineName`, `machineID` and `serialNumber` (strings) and
     /// `certificate` and `privateKey` (data), and the sign-in's `appleID`,
-    /// `password`, `udid` and `anisetteServer` (strings) and
-    /// `anisetteState` (data).
+    /// `udid` and `anisetteServer` (strings) and `anisetteState` (data).
+    ///
+    /// In version 1, `password` (a string) is what the app signs in with.
+    /// Version 2 says its `version` (an integer, 2), and has Apple's token
+    /// in the password's place: `adsid` and `token` (strings),
+    /// `tokenDuration` and `tokenExpiry` (integers, as Apple gave them),
+    /// `tokenReceived` (a date), and, when the sign-in sent Apple its own
+    /// in place of the server's, `clientInfo` and `userAgent` (strings).
     pub fn hand_off(&self, sign_in: &SignIn) -> Vec<u8> {
         let mut dictionary = plist::Dictionary::new();
         dictionary.insert("teamID".into(), self.team_id.clone().into());
@@ -98,7 +148,31 @@ impl Certificate {
             plist::Value::Data(self.private_key.clone()),
         );
         dictionary.insert("appleID".into(), sign_in.apple_id.clone().into());
-        dictionary.insert("password".into(), sign_in.password.clone().into());
+        match &sign_in.secret {
+            Secret::Password(password) => {
+                dictionary.insert("password".into(), password.clone().into());
+            }
+            Secret::Token(token) => {
+                let version = Format::Token.version();
+                dictionary.insert("version".into(), plist::Value::Integer(version.into()));
+                dictionary.insert("adsid".into(), token.adsid.clone().into());
+                dictionary.insert("token".into(), token.token.clone().into());
+                dictionary.insert(
+                    "tokenDuration".into(),
+                    plist::Value::Integer(token.duration.into()),
+                );
+                dictionary.insert(
+                    "tokenExpiry".into(),
+                    plist::Value::Integer(token.expiry.into()),
+                );
+                let received = UNIX_EPOCH + Duration::from_secs(token.saved_at);
+                dictionary.insert("tokenReceived".into(), plist::Value::Date(received.into()));
+                if let Some((client_info, user_agent)) = &token.client_info {
+                    dictionary.insert("clientInfo".into(), client_info.clone().into());
+                    dictionary.insert("userAgent".into(), user_agent.clone().into());
+                }
+            }
+        }
         dictionary.insert("udid".into(), sign_in.udid.clone().into());
         dictionary.insert(
             "anisetteServer".into(),
@@ -212,31 +286,43 @@ mod tests {
         assert!(!holds_key(b"not a certificate", TEST_PUBLIC_KEY));
     }
 
-    #[test]
-    fn the_hand_off_has_what_atelier_reads() {
-        let certificate = Certificate {
+    fn test_certificate() -> Certificate {
+        Certificate {
             team_id: "ABCDE12345".into(),
             machine_name: "Atelier Installer".into(),
             machine_id: "machine".into(),
             serial_number: "1A2B3C".into(),
             der: TEST_CERTIFICATE.to_vec(),
             private_key: vec![1, 2, 3],
-        };
-        let sign_in = SignIn {
+        }
+    }
+
+    fn test_sign_in(secret: Secret) -> SignIn {
+        SignIn {
             apple_id: "someone@example.com".into(),
-            password: "not a real password".into(),
+            secret,
             udid: "00000000-0000000000000000".into(),
             anisette_server: "https://anisette.example.com".into(),
             anisette_state: vec![4, 5, 6],
-        };
-        let bytes = certificate.hand_off(&sign_in);
+        }
+    }
+
+    fn keys(dictionary: &plist::Dictionary) -> Vec<&str> {
+        let mut keys: Vec<&str> = dictionary.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    #[test]
+    fn the_hand_off_has_what_atelier_reads() {
+        let sign_in = test_sign_in(Secret::Password("not a real password".into()));
+        let bytes = test_certificate().hand_off(&sign_in);
         assert!(bytes.starts_with(b"<?xml"));
         let value = plist::Value::from_reader_xml(bytes.as_slice()).unwrap();
         let dictionary = value.as_dictionary().unwrap();
-        let mut keys: Vec<&str> = dictionary.keys().map(String::as_str).collect();
-        keys.sort_unstable();
+        // Version 1 as Atelier's builds from 1060 read it, without a version.
         assert_eq!(
-            keys,
+            keys(dictionary),
             [
                 "anisetteServer",
                 "anisetteState",
@@ -278,6 +364,94 @@ mod tests {
             dictionary["anisetteState"].as_data(),
             Some(&[4u8, 5, 6][..])
         );
+    }
+
+    #[test]
+    fn version_2_has_apples_token_in_the_passwords_place() {
+        let mut token = Token {
+            server: "https://anisette.example.com".into(),
+            client_info: Some((
+                "<MacBookPro13,2> <macOS;13.1;22C65>".into(),
+                "akd/1.0".into(),
+            )),
+            adsid: "000123-45-6789".into(),
+            token: "not a real token".into(),
+            duration: 31_536_000,
+            expiry: 1_826_036_000_000,
+            saved_at: 1_794_500_000,
+        };
+        let sign_in = test_sign_in(Secret::Token(token.clone()));
+        let bytes = test_certificate().hand_off(&sign_in);
+        let value = plist::Value::from_reader_xml(bytes.as_slice()).unwrap();
+        let dictionary = value.as_dictionary().unwrap();
+        assert_eq!(
+            keys(dictionary),
+            [
+                "adsid",
+                "anisetteServer",
+                "anisetteState",
+                "appleID",
+                "certificate",
+                "clientInfo",
+                "machineID",
+                "machineName",
+                "privateKey",
+                "serialNumber",
+                "teamID",
+                "token",
+                "tokenDuration",
+                "tokenExpiry",
+                "tokenReceived",
+                "udid",
+                "userAgent",
+                "version"
+            ]
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("password"));
+        assert_eq!(dictionary["version"].as_signed_integer(), Some(2));
+        assert_eq!(dictionary["adsid"].as_string(), Some("000123-45-6789"));
+        assert_eq!(dictionary["token"].as_string(), Some("not a real token"));
+        assert_eq!(
+            dictionary["tokenDuration"].as_unsigned_integer(),
+            Some(31_536_000)
+        );
+        assert_eq!(
+            dictionary["tokenExpiry"].as_unsigned_integer(),
+            Some(1_826_036_000_000)
+        );
+        let received = std::time::SystemTime::from(dictionary["tokenReceived"].as_date().unwrap());
+        assert_eq!(
+            received.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            1_794_500_000
+        );
+        assert_eq!(
+            dictionary["clientInfo"].as_string(),
+            Some("<MacBookPro13,2> <macOS;13.1;22C65>")
+        );
+        assert_eq!(dictionary["userAgent"].as_string(), Some("akd/1.0"));
+        assert_eq!(
+            dictionary["appleID"].as_string(),
+            Some("someone@example.com")
+        );
+
+        // The server's own client info: neither key.
+        token.client_info = None;
+        let bytes = test_certificate().hand_off(&test_sign_in(Secret::Token(token)));
+        let value = plist::Value::from_reader_xml(bytes.as_slice()).unwrap();
+        let dictionary = value.as_dictionary().unwrap();
+        assert!(!dictionary.contains_key("clientInfo") && !dictionary.contains_key("userAgent"));
+    }
+
+    #[test]
+    fn knows_its_formats_by_version() {
+        assert_eq!(Format::of_version(1), Some(Format::Password));
+        assert_eq!(Format::of_version(2), Some(Format::Token));
+        assert_eq!(Format::of_version(3), None);
+        assert_eq!(Format::of_version(0), None);
+        for format in [Format::Password, Format::Token] {
+            assert_eq!(Format::of_version(format.version()), Some(format));
+        }
+        assert_eq!(Format::default().version(), VERSION);
     }
 
     #[test]

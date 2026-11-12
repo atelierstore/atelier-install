@@ -12,10 +12,11 @@
 //! `--forget`, once Apple refuses it, and some minutes before Apple says
 //! it ends.
 //!
-//! An app that takes the sign-in, such as Atelier from build 1060, takes
-//! the password with it, so a run for one still asks for the password and
-//! signs in with it; the token only spares a run for any other app the
-//! password and the code.
+//! An app that takes the sign-in in version 1 of the hand-off, such as
+//! Atelier from build 1060, takes the password with it, so a run for one
+//! still asks for the password and signs in with it. One that takes
+//! version 2 takes the token in the password's place (certificate.rs):
+//! the kept one, when Apple takes it.
 
 use std::fs;
 use std::io;

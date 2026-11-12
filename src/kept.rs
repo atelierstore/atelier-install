@@ -6,7 +6,8 @@
 //! - `install.plist`: what was signed, from which IPA, and what the app
 //!   takes (handoff.rs);
 //! - `install-signing.plist`: the certificate and the sign-in the app
-//!   takes, password included, when it takes them (certificate.rs);
+//!   takes, its password or Apple's token included, when it takes them
+//!   (certificate.rs);
 //! - the signed app, where it was signed, in `work/`.
 //!
 //! It all goes once the app is installed and has what it takes, when
@@ -18,6 +19,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::certificate::Format;
 use crate::handoff::HandOffs;
 use crate::state::{self, State};
 
@@ -80,6 +82,10 @@ impl Install {
         }
         if let Some(path) = &self.hand_offs.signing {
             record.insert("SigningTo".into(), text(path));
+            record.insert(
+                "SigningVersion".into(),
+                plist::Value::Integer(self.hand_offs.format.version().into()),
+            );
         }
         if let Some(problem) = &self.signing_problem {
             record.insert("SigningProblem".into(), text(problem));
@@ -170,6 +176,11 @@ fn read(state: &State) -> Option<Install> {
         hand_offs: HandOffs {
             pairing: text("PairingTo"),
             signing: text("SigningTo"),
+            // As this program's builds kept it before version 2.
+            format: match record.get("SigningVersion") {
+                None => Format::Password,
+                Some(version) => Format::of_version(version.as_signed_integer()?)?,
+            },
         },
         signing_problem: text("SigningProblem"),
         signed_at: record
@@ -206,6 +217,7 @@ mod tests {
             hand_offs: HandOffs {
                 pairing: Some("Library/Application Support/Pairing/pairingFile.plist".into()),
                 signing: Some("Library/Caches/Installer/certificate.plist".into()),
+                format: Format::Token,
             },
             signing_problem: None,
             signed_at: now(),
@@ -228,9 +240,24 @@ mod tests {
         assert!(!loaded.is_from("https://example.com/Atelier.ipa", Some(&"cd".repeat(32))));
         assert!(!loaded.is_from("https://example.com/Other.ipa", None));
 
+        // One kept by this program's builds before version 2 is version 1.
+        let mut record = plist::Value::from_file(state.install())
+            .unwrap()
+            .into_dictionary()
+            .unwrap();
+        record.remove("SigningVersion");
+        plist::Value::Dictionary(record)
+            .to_file_xml(state.install())
+            .unwrap();
+        assert_eq!(
+            Install::load(&state).unwrap().hand_offs.format,
+            Format::Password
+        );
+
         // Saved again without a sign-in, none is left.
         let mut without = kept.clone();
         without.hand_offs.signing = None;
+        without.hand_offs.format = Format::Password;
         without.save(&state, None).unwrap();
         assert!(!state.install_signing().exists());
         assert_eq!(Install::load(&state).unwrap().signing(&state), None);

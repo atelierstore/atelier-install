@@ -45,6 +45,9 @@ mod state;
 #[allow(dead_code, reason = "the installer's, which uses all of it")]
 #[path = "../src/terminal.rs"]
 mod terminal;
+#[allow(dead_code, reason = "the installer's, which uses all of it")]
+#[path = "../src/token.rs"]
+mod token;
 #[path = "../src/vfs.rs"]
 mod vfs;
 

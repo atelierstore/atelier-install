@@ -16,7 +16,8 @@
 //! 7. hands the app what it takes (`handoff.rs`): what its Info.plist
 //!    declares, once the user said yes, or, for Atelier, the pairing, and,
 //!    when Atelier takes them, the certificate it's signed with and the
-//!    sign-in, so that it opens signed in (`certificate.rs`).
+//!    sign-in, with the password or Apple's token, as it takes it, so that
+//!    it opens signed in (`certificate.rs`).
 //!    It deletes its own copy of the pairing once the app has it.
 //!
 //! What a step makes is kept until the install's done (`kept.rs`), so a run
@@ -67,10 +68,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use isideload::dev::developer_session::DeveloperSession;
 
+use crate::certificate::{Format, Secret};
 use crate::handoff::HandOffs;
 use crate::pairing::Pairing;
 use crate::state::State;
 use crate::terminal::Stop;
+use crate::token::Token;
 
 /// The system's, checking in with rootshell every so often (`awake.rs`).
 #[global_allocator]
@@ -392,7 +395,7 @@ fn install(
     // Kept with what the app takes, so that a run stopped from here on goes
     // on from here.
     let (signing, signing_problem) = match &ipa.hand_offs.signing {
-        Some(_) => match signing_file(&signed, &account, state, udid) {
+        Some(_) => match signing_file(&signed, account, ipa.hand_offs.format, state, udid) {
             Ok(file) => (Some(file), None),
             Err(why) => (None, Some(why)),
         },
@@ -582,14 +585,16 @@ struct Account {
     email: String,
     /// None when the run signed in with the token the last one kept.
     password: Option<String>,
-    /// The anisette server the sign-in went through.
-    server: String,
+    /// Apple's token for the sign-in, with the anisette server it went
+    /// through.
+    token: Token,
 }
 
 /// Asks for the Apple ID and signs in to Apple: with the token the last
 /// sign-in kept, when there's one and it does, otherwise with the password.
 /// `takes_it`, the app that takes the sign-in once it's installed, which
-/// takes the password with it.
+/// takes the password with it in version 1 of the hand-off, and the token
+/// in its place in version 2.
 fn sign_in(
     options: &Options,
     state: &State,
@@ -599,10 +604,11 @@ fn sign_in(
     if email.is_empty() {
         return Err(Stop::new("Stopped: no Apple ID was given"));
     }
+    let takes_password = takes_it.is_some_and(|ipa| ipa.hand_offs.format == Format::Password);
     // --sign-in checks the password.
-    if takes_it.is_none() && !options.sign_in {
+    if !takes_password && !options.sign_in {
         let anisette = options.anisette.as_deref();
-        if let Some((developer, server)) =
+        if let Some((developer, token)) =
             wait(async { Ok(apple::kept_sign_in(state, &email, anisette).await) })?
         {
             terminal::say("Signed in.");
@@ -612,12 +618,19 @@ fn sign_in(
                 Account {
                     email,
                     password,
-                    server,
+                    token,
                 },
             ));
         }
     }
     match takes_it {
+        Some(ipa) if ipa.hand_offs.format == Format::Token => {
+            terminal::say(format!(
+                "The password only goes to Apple. {} gets Apple's token for this sign-in,",
+                ipa.name
+            ));
+            terminal::say("not the password. Apple may ask for a code.");
+        }
         Some(ipa) if ipa.bundle_id == ipa::ATELIER => {
             terminal::say(
                 "The password goes to Apple, and to Atelier on this iPhone, which keeps it",
@@ -641,7 +654,7 @@ fn sign_in(
     terminal::say("If nothing more shows within a minute, a server isn't answering: press");
     terminal::say("Control-C, and run this again, which tries that server last.");
     let servers = wait(async { Ok(apple::servers(state, options.anisette.as_deref()).await) })?;
-    let (developer, server, kept) = wait(apple::sign_in(state, &servers, &email, &password))?;
+    let (developer, token, kept) = wait(apple::sign_in(state, &servers, &email, &password))?;
     terminal::say("Signed in.");
     if kept {
         terminal::say(
@@ -655,7 +668,7 @@ fn sign_in(
         Account {
             email,
             password: Some(password),
-            server,
+            token,
         },
     ))
 }
@@ -663,30 +676,37 @@ fn sign_in(
 /// What to do when Atelier doesn't get the sign-in.
 const YOURSELF: &str = "Sign in to Atelier yourself: it then makes a certificate of its own.";
 
-/// The certificate and the sign-in, for an app that takes them
-/// (certificate.rs), or why there's none to hand over.
+/// The certificate and the sign-in, in `format`, for an app that takes
+/// them (certificate.rs), or why there's none to hand over.
 fn signing_file(
     signed: &apple::Signed,
-    account: &Account,
+    account: Account,
+    format: Format,
     state: &State,
     udid: &str,
 ) -> Result<Vec<u8>, String> {
     let Some(certificate) = &signed.certificate else {
         return Err("Apple doesn't list the certificate this program signed with.".into());
     };
-    let Some(password) = &account.password else {
-        return Err("This run signed in without the password.".into());
+    let server = account.token.server.clone();
+    let secret = match format {
+        Format::Password => Secret::Password(
+            account
+                .password
+                .ok_or("This run signed in without the password.")?,
+        ),
+        Format::Token => Secret::Token(account.token),
     };
     let anisette_state =
-        certificate::anisette_state(&state.anisette(&account.server)).map_err(|error| {
+        certificate::anisette_state(&state.anisette(&server)).map_err(|error| {
             terminal::log(format!("reading the anisette state: {error}"));
             "Couldn't read the sign-in's anisette state.".to_string()
         })?;
     let sign_in = certificate::SignIn {
-        apple_id: account.email.clone(),
-        password: password.clone(),
+        apple_id: account.email,
+        secret,
         udid: udid.to_string(),
-        anisette_server: account.server.clone(),
+        anisette_server: server,
         anisette_state,
     };
     Ok(certificate.hand_off(&sign_in))

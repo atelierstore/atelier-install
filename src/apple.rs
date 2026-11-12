@@ -123,15 +123,15 @@ fn last_of(mut list: List, stalled: &[String]) -> List {
     list
 }
 
-/// Signs in to Apple's developer services: the session, the anisette
-/// server it went through, and whether Apple's token for it is kept for the
-/// next run (token.rs).
+/// Signs in to Apple's developer services: the session, Apple's token for
+/// it, with the anisette server it went through, and whether that token is
+/// kept for the next run (token.rs).
 pub async fn sign_in(
     state: &State,
     list: &List,
     email: &str,
     password: &str,
-) -> Result<(DeveloperSession, String, bool), Stop> {
+) -> Result<(DeveloperSession, Token, bool), Stop> {
     let cancelled = Arc::new(AtomicBool::new(false));
     let mut route = Route::new(list, state.last_server().as_deref());
     let mut server = route.start();
@@ -148,7 +148,7 @@ pub async fn sign_in(
                 state.set_last_server(&current.url);
                 state.clear_stalled();
                 let kept = keep(state, email, &token);
-                return Ok((developer, current.url.clone(), kept));
+                return Ok((developer, token, kept));
             }
             Err(report) => {
                 let problem = Problem::of(&report, cancelled.load(Ordering::SeqCst));
@@ -257,14 +257,14 @@ async fn attempt(
 
 /// Signs in with the token an earlier sign-in kept for `email`, without the
 /// password, through the anisette server that one went through: the
-/// session, and that server. None when there's no token worth trying, or
+/// session, and that token. None when there's no token worth trying, or
 /// Apple doesn't take it, which it then deletes. `own`: the server the
 /// user asked for, if any.
 pub async fn kept_sign_in(
     state: &State,
     email: &str,
     own: Option<&str>,
-) -> Option<(DeveloperSession, String)> {
+) -> Option<(DeveloperSession, Token)> {
     let token = Token::load(state, email, kept::now())?;
     if own.is_some_and(|own| own != token.server) {
         terminal::log("kept sign-in: not tried, another server was asked for");
@@ -295,7 +295,7 @@ pub async fn kept_sign_in(
         Ok(developer) => {
             state.set_last_server(&token.server);
             state.clear_stalled();
-            Some((developer, token.server))
+            Some((developer, token))
         }
         Err(report) => {
             let refused = refused(&report);
