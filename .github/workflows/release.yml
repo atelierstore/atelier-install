@@ -1,32 +1,125 @@
 name: Release
 
-# A tag such as v0.1.0 builds the program and publishes it as that
-# release's atelier-install.wasm, with its SHA-256, which the README's
-# link (releases/latest/download) serves.
+# A tag such as v0.1.0 publishes that version of the program as the
+# release's atelier-install.wasm, which the README's link
+# (releases/latest/download) serves:
+#
+# 1. the tag has to be the version in Cargo.toml, and the repo public,
+# 2. CI runs every test on the tag (ci.yml) and builds the program with the
+#    Rust that rust-toolchain.toml pins,
+# 3. that same file, the one the tests ran, gets signed build provenance,
+#    which says this workflow built it from the tag's commit, and
+# 4. it's published with its SHA-256.
+#
+# Only the repo's admins can push a v* tag (the "Release tags" ruleset). A
+# tag with a suffix, such as v0.2.0-beta.1, makes a pre-release, which
+# releases/latest/download skips.
+
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  version:
+    name: Check the tag
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Rust, with the WASI target
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The tag is Cargo.toml's version, and the repo is public
+        id: check
+        env:
+          TAG: ${{ github.ref_name }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
-          rustup toolchain install stable --profile minimal --target wasm32-wasip1
-          rustup default stable
-      - name: The program
-        run: |
-          cargo build --release --locked --target wasm32-wasip1
-          cp target/wasm32-wasip1/release/atelier-install.wasm .
-          sha256sum atelier-install.wasm > atelier-install.wasm.sha256
+          if [ "$PRIVATE" = true ]; then
+            echo "::error::Make the repo public first: build provenance needs it, and the README's download link only works for everyone once it is. Then re-run this workflow."
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag $TAG isn't vMAJOR.MINOR.PATCH, optionally with a suffix such as -beta.1."
+            exit 1
+          fi
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          if [ "${TAG#v}" != "$version" ]; then
+            echo "::error::Tag $TAG isn't the version in Cargo.toml, $version. Change [workspace.package] version in a pull request first, then tag its merge."
+            exit 1
+          fi
+          case "$TAG" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "atelier-install $version"
+
+  test:
+    name: CI
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this job can write: it creates the release and signs the
+    # provenance, and runs nothing but GitHub's attest action and gh.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Get the program CI tested
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: atelier-install.wasm
+          path: .
+      - name: Its SHA-256
+        run: sha256sum atelier-install.wasm | tee atelier-install.wasm.sha256
+      - name: Build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: atelier-install.wasm
       - name: The release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          COMMIT: ${{ github.sha }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
-          gh release create "$GITHUB_REF_NAME" atelier-install.wasm atelier-install.wasm.sha256 \
-            --title "$GITHUB_REF_NAME" --notes "atelier-install.wasm, built from $GITHUB_SHA. SHA-256: $(cut -d' ' -f1 atelier-install.wasm.sha256)"
+          digest=$(cut -d' ' -f1 atelier-install.wasm.sha256)
+          cat > notes.md <<NOTES
+          \`atelier-install.wasm\`, built from $COMMIT by [this run]($RUN), which ran every test on it first.
+
+          SHA-256: \`$digest\`
+
+          In rootshell:
+
+          \`\`\`sh
+          curl -fsSLO https://github.com/$REPO/releases/download/$TAG/atelier-install.wasm
+          \`\`\`
+
+          To check that this repo's release workflow built it, with GitHub's CLI:
+
+          \`\`\`sh
+          gh attestation verify atelier-install.wasm --repo $REPO
+          \`\`\`
+          NOTES
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" atelier-install.wasm atelier-install.wasm.sha256 \
+            --repo "$REPO" --verify-tag --title "atelier-install ${TAG#v}" \
+            --notes-file notes.md --generate-notes "${flags[@]}"
