@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # The Actions the workflows use, pinned to commits: Dependabot moves the
+  # commit and the version in its comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A version has a week to be pulled before it's proposed.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The Rust in rust-toolchain.toml. A new Rust comes as a pull request, so
+  # its new lints pass CI before a release is built with it.
+  - package-ecosystem: rust-toolchain
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

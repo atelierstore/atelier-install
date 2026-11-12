@@ -178,8 +178,10 @@ The Apple ID's sign-in and the certificate the app was signed with, as an XML pl
 
 ## Building and testing
 
+`rust-toolchain.toml` pins the Rust version, with the WASI target, so local builds, CI and releases use the same one. A new version comes as a pull request from Dependabot.
+
 ```sh
-rustup target add wasm32-wasip1
+rustup toolchain install                        # the pinned Rust, once
 cargo build --release --target wasm32-wasip1    # target/wasm32-wasip1/release/atelier-install.wasm
 cargo test --workspace                          # the unit tests
 ```
@@ -187,7 +189,7 @@ cargo test --workspace                          # the unit tests
 `harness/rootshell.py` runs a program under wasmtime with rootshell's calls answered by the system's sockets, the way rootshell answers them, including its 64 KB slot and its file broker's errors. The unit tests also run as WASI under it. `harness/test_install.py` runs the real program in it: it pairs with a stand-in iPhone (`testphone`) on the code it shows, waits for LocalDevVPN, stops at the tunnel and says what to do, and keeps what it should.
 
 ```sh
-pip install wasmtime dnslib
+pip install --require-hashes -r harness/requirements.txt
 CARGO_TARGET_WASM32_WASIP1_RUNNER="python3 $PWD/harness/rootshell.py --dir $(mktemp -d)" \
     cargo test --target wasm32-wasip1
 cargo build -p atelier-testphone
@@ -195,6 +197,16 @@ python3 harness/test_install.py
 ```
 
 `examples/sign.rs` downloads and signs an IPA as the program does, with a certificate and key of your own in place of Apple's. It's for timing the signing under rootshell's runtime.
+
+## Releases
+
+A tag such as `v0.1.0` publishes a release (`.github/workflows/release.yml`). The tag has to be the version in `Cargo.toml`, and only the repo's admins can push one. CI runs every test on the tag and builds the program, and that same file is published as the release's `atelier-install.wasm`, with its SHA-256 and signed build provenance, which says this repo's release workflow built it, from which commit. To check a download with GitHub's CLI:
+
+```sh
+gh attestation verify atelier-install.wasm --repo atelierstore/atelier-install
+```
+
+To report a vulnerability, see `SECURITY.md`.
 
 ## License
 

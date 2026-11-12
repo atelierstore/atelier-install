@@ -1,0 +1,8 @@
+# The Rust that CI, releases and local builds use, so a new Rust's lints and
+# code generation only arrive through a pull request that passes CI.
+# Dependabot proposes each new version (.github/dependabot.yml).
+[toolchain]
+channel = "1.100.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-wasip1"]
+profile = "minimal"
