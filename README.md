@@ -200,7 +200,7 @@ python3 harness/test_install.py
 
 ## Releases
 
-A tag such as `v0.1.0` publishes a release (`.github/workflows/release.yml`). The tag has to be the version in `Cargo.toml`, and only the repo's admins can push one. CI runs every test on the tag and builds the program, and that same file is published as the release's `atelier-install.wasm`, with its SHA-256 and signed build provenance, which says this repo's release workflow built it, from which commit. To check a download with GitHub's CLI:
+Merging a pull request that changes `[workspace.package] version` in `Cargo.toml` publishes a release (`.github/workflows/release.yml`). CI runs every test on the merge commit and builds the program, and that same file is published as the release's `atelier-install.wasm`, with its SHA-256 and signed build provenance, which says this repo's release workflow built it, from which commit. The workflow tags the commit with the version, such as `v0.2.0`. A version with a suffix, such as `0.2.0-beta.1`, makes a pre-release, which the download link skips. An admin can also push that tag on a commit in main, if the version has no release yet. To check a download with GitHub's CLI:
 
 ```sh
 gh attestation verify atelier-install.wasm --repo atelierstore/atelier-install
