@@ -1,0 +1,32 @@
+name: Release
+
+# A tag such as v0.1.0 builds the program and publishes it as that
+# release's atelier-install.wasm, with its SHA-256, which the README's
+# link (releases/latest/download) serves.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust, with the WASI target
+        run: |
+          rustup toolchain install stable --profile minimal --target wasm32-wasip1
+          rustup default stable
+      - name: The program
+        run: |
+          cargo build --release --locked --target wasm32-wasip1
+          cp target/wasm32-wasip1/release/atelier-install.wasm .
+          sha256sum atelier-install.wasm > atelier-install.wasm.sha256
+      - name: The release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" atelier-install.wasm atelier-install.wasm.sha256 \
+            --title "$GITHUB_REF_NAME" --notes "atelier-install.wasm, built from $GITHUB_SHA. SHA-256: $(cut -d' ' -f1 atelier-install.wasm.sha256)"

@@ -1,0 +1,22 @@
+[package]
+name = "atelier-testphone"
+description = "A stand-in iPhone for atelier-install's tests: its side of pair-setup"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+idevice = { workspace = true, features = ["remote_pairing", "rustcrypto"] }
+# Pair-setup as idevice models it, from the phone's side, with the crates
+# idevice itself uses for remote pairing (as in Atelier's own tests).
+idevice-srp = "0.6"
+rand = "0.9"
+base64 = "0.22"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "net", "time", "macros", "io-util"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hkdf = "0.12"
+sha2 = "0.10"
+chacha20poly1305 = "0.10"
+plist.workspace = true

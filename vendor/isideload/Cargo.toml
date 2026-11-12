@@ -1,0 +1,72 @@
+# isideload 0.5.2 (MIT, Nicholas Sharp), vendored for atelier-install, the
+# rootshell installer: see README.md beside this file for what changed. The
+# published manifest is Cargo.toml.orig.
+[package]
+name = "isideload"
+description = "Sideload iOS/iPadOS applications"
+license = "MIT"
+authors = ["Nicholas Sharp <nab@nabdev.me>"]
+version = "0.5.2"
+edition = "2024"
+repository = "https://github.com/nab138/isideload"
+publish = false
+
+[features]
+default = ["install"]
+install = ["dep:idevice"]
+fs-storage = []
+# Browsers' builds, which this copy doesn't make: kept only so that the
+# async traits' `cfg_attr`s still name a feature.
+wasm = []
+
+[dependencies]
+# rustcrypto rather than ring: the backend that's plain Rust, as in the
+# probe; the tunnel's TLS-PSK is idevice's own either way.
+idevice = { version = "0.1.61", optional = true, default-features = false, features = ["rustcrypto", "afc", "installation_proxy", "remote_pairing", "rsd"] }
+plist = "1.8"
+plist-macro = "0.1.4"
+thiserror = "2.0.17"
+async-trait = "0.1.89"
+serde = "1.0.228"
+rand = "0.8.5"
+uuid = { version = "1.20.0", features = ["v4"] }
+tracing = "0.1.44"
+rootcause = "0.12.0"
+futures-util = "0.3.31"
+serde_json = "1.0.149"
+base64 = "0.22.1"
+hex = "0.4.3"
+sha2 = "0.11.0"
+srp = "0.7.0-rc.3"
+pbkdf2 = "0.13.0"
+hmac = "0.13.0"
+cbc = { version = "0.2.0", features = ["alloc"] }
+aes = "0.9.0"
+aes-gcm = "0.11.1"
+rsa = { version = "0.9.10" }
+# Only its lock, which waits for nothing when nothing else holds it.
+tokio = { version = "1.49", features = ["sync"] }
+rcgen = { version = "0.14.7", default-features = false, features = ["ring", "pem"] }
+p12-keystore = { version = "0.3.0-rc4", package = "isideload-p12-keystore" }
+zip = { version = "8.3", default-features = false, features = ["deflate"] }
+isideload-vfs = { version = "0.0.1" }
+sha1 = "0.11.0"
+http = "1.4.0"
+urlencoding = { version = "2.1.3" }
+futures = "0.3.32"
+web-time = "1"
+x509-cert = "0.2.5"
+# Its signing, patched to check in as it hashes (../apple-codesign-quick).
+apple-codesign-quick = { path = "../apple-codesign-quick" }
+# The HTTP client and the WebSocket in place of reqwest and
+# tokio-tungstenite (src/http.rs, src/anisette/remote_v3/websocket.rs).
+httparse = "1.10"
+# Answers that come gzipped, as Apple's developer services' do whatever
+# the request accepts. The zlib backend zip's is built with.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+tungstenite = { version = "0.29.0", default-features = false, features = ["handshake"] }
+
+# Upstream's code isn't clippy-clean as published, and stays as it is here.
+# This copy's own changes (README.md) were clean when made.
+[lints.clippy]
+all = { level = "allow", priority = -1 }

@@ -1,0 +1,124 @@
+{
+	"version": 1,
+	"updated": "2026-11-02",
+	"tries": 4,
+	"clientInfo": {
+		"clientInfo": "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
+		"userAgent": "akd/1.0 CFNetwork/811.5.4"
+	},
+	"servers": [
+		{
+			"url": "https://mac-ani.jkcoxson.com",
+			"name": "jkcoxson (Mac)",
+			"kind": "mac"
+		},
+		{
+			"url": "https://ani.iloader.app",
+			"name": "iloader"
+		},
+		{
+			"url": "https://new.ani.sidestore.io",
+			"name": "SideStore (New)",
+			"kind": "mac"
+		},
+		{
+			"url": "https://ani3.stikstore.app",
+			"name": "StikStore"
+		},
+		{
+			"url": "https://ani.sidestore.io",
+			"name": "SideStore",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.sidestore.app",
+			"name": "SideStore (.app)",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.sidestore.zip",
+			"name": "SideStore (.zip)",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.846969.xyz",
+			"name": "SideStore (.xyz)",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.jkcoxson.com",
+			"name": "jkcoxson (Windows ADI)",
+			"kind": "windows"
+		},
+		{
+			"url": "https://win.ani.sidestore.io",
+			"name": "SideStore (Windows ADI)",
+			"kind": "windows"
+		},
+		{
+			"url": "https://ani.npeg.us",
+			"name": "nythepegasus",
+			"kind": "other"
+		},
+		{
+			"url": "https://anisette.wedotstud.io",
+			"name": "WE. Studio",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.xu30.top",
+			"name": "SteX",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.owoellen.rocks",
+			"name": "owoellen",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.idevicehacked.com",
+			"name": "iDH Server",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.neoarz.com",
+			"name": "neoarz",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani3server.fly.dev",
+			"name": "pythonplayer123",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.jaydenha.uk",
+			"name": "Jayden's Server",
+			"kind": "other"
+		},
+		{
+			"url": "https://anisette.crystall1ne.dev",
+			"name": "crystall1nedev's server",
+			"kind": "other"
+		},
+		{
+			"url": "https://omni.ethxn.xyz",
+			"name": "ethxn's omnisette server",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.sjwon0368.dpdns.org",
+			"name": "koremi",
+			"kind": "other"
+		},
+		{
+			"url": "https://ani.uwucloud.fun",
+			"name": "uwucloud",
+			"kind": "other"
+		},
+		{
+			"url": "https://anisette.lillq.me",
+			"name": "Lill q",
+			"kind": "mac"
+		}
+	]
+}

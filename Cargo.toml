@@ -1,0 +1,82 @@
+[package]
+name = "atelier-install"
+description = "Pairs the iPhone, signs an app with a free Apple ID and installs it, all from rootshell (App Store)"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[workspace]
+resolver = "2"
+members = ["testphone", "vendor/isideload"]
+# Crates patched for this program, not members; its copy of isideload is
+# one, for its tests.
+exclude = ["vendor/jktcp", "vendor/apple-codesign-quick"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+
+[workspace.dependencies]
+# The idevice (MIT) release Atelier is built with.
+idevice = { version = "=0.1.68", default-features = false }
+plist = "1.8"
+
+# idevice's TCP stack, patched for rootshell's single thread (see its lib.rs).
+[patch.crates-io]
+jktcp = { path = "vendor/jktcp" }
+
+[dependencies]
+# What the program reaches the iPhone with, on its own tunnel (src/tunnel.rs)
+# over vendor/jktcp. rustcrypto: the TLS backend that's plain Rust.
+idevice = { workspace = true, features = [
+    "remote_pairing",
+    "rsd",
+    "tunnel_tcp_stack",
+    "afc",
+    "house_arrest",
+    "installation_proxy",
+    "rustcrypto",
+] }
+# isideload as Atelier's Apple ID signing has it, with its own HTTP client
+# and WebSocket in place of reqwest's and tokio's (vendor/isideload).
+isideload = { path = "vendor/isideload", features = ["install", "fs-storage"] }
+# The file access isideload goes through, which a WASI program has to set.
+isideload-vfs = "0.0.1"
+# isideload's signing, which checks in with rootshell as it hashes
+# (src/awake.rs); examples/sign.rs signs with it directly.
+apple-codesign-quick = { path = "vendor/apple-codesign-quick" }
+rootcause = "0.12"
+# Only its I/O traits, which idevice is written on.
+tokio = { version = "1", features = ["io-util"] }
+plist.workspace = true
+# The ones isideload builds with, for the IPA's Info.plist and the
+# anisette list.
+zip = { version = "8", default-features = false, features = ["deflate"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+# The ones isideload keeps the key and reads certificates with, to find the
+# certificate handed to the app (src/certificate.rs).
+rsa = "0.9.10"
+x509-cert = "0.2.5"
+getrandom = "0.2"
+
+# idevice's `wasm` feature gives its time shim something to build on for
+# wasm32; nothing of a browser's ends up in it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+idevice = { workspace = true, features = ["wasm"] }
+
+# The tests' stand-in iPhone runs the TCP stack off WASI too, where its
+# reads race a timer that needs a runtime to exist.
+[target.'cfg(not(target_os = "wasi"))'.dev-dependencies]
+tokio = { version = "1", features = ["rt", "time"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
