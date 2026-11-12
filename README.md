@@ -139,13 +139,42 @@ An app declares in its Info.plist what it takes once it's installed, and where i
 ```
 
 - **What it can declare.** Either entry can be left out, and each path must be inside the app's Documents, Library or tmp folder.
-- **The pairing** is an RPPairing file, as idevice writes it.
-- **The signing identity** is the Apple ID's sign-in and the certificate the app was signed with: the Apple ID and password, the certificate and its key, the iPhone's UDID, and the anisette server and state that the sign-in went through. With it, the app signs in to Apple as you, as the same machine, so Apple doesn't ask for a code again, and signs with the same certificate (`src/certificate.rs`).
 - **How it's written.** The program writes what's declared through house_arrest, and nothing else. Nothing that comes with an IPA runs in the program that holds the pairing and the password.
 - **Your yes comes first.** For any app but Atelier, the program first says what each item lets the app do, and asks.
 - **An app that declares nothing gets nothing.** `--pairing-to` hands the pairing to an app that reads it somewhere without declaring it.
 
 Atelier gets two things without being asked: the pairing at `Library/Application Support/Pairing/pairingFile.plist`, and, when its Info.plist says `AtelierInstallerHandOff`, the signing identity at `Library/Caches/Installer/certificate.plist`.
+
+Version 1 of `SideloadHandOff` means the two formats below. A change to either, such as Apple's token in place of the password, will come with a new version.
+
+### The pairing
+
+An RPPairing file, as idevice writes it (`RpPairingFile`): an XML plist with the identity this program paired as. It's what pairing through Developer Mode's "Pair with …" makes on iOS 27. With it, an app pair-verifies with iOS's RemotePairing service, at 10.7.0.1 through LocalDevVPN, which then opens a tunnel to the iPhone's services. It isn't the lockdown pairing file that a computer makes over USB, as iloader and jitterbugpair do for SideStore and StikDebug.
+
+| Key | Type | What it is |
+|---|---|---|
+| `identifier` | string | The host's identifier, a UUID, by which the iPhone knows the pairing |
+| `public_key` | data, 32 bytes | The host's Ed25519 public key |
+| `private_key` | data, 32 bytes | The host's Ed25519 private key |
+| `alt_irk` | data, 16 bytes | The iPhone's identity resolving key from the pairing, which recognizes its `_remotepairing._tcp` announcements. idevice reads the file without it. |
+
+### The signing identity
+
+The Apple ID's sign-in and the certificate the app was signed with, as an XML plist (`src/certificate.rs`). With it, the app signs in to Apple as you, as the same machine, so Apple doesn't ask for a code again, and signs with the same certificate. Atelier moves it on its first launch, with the password going into its Keychain. An app should do the same rather than leave the file in its container.
+
+| Key | Type | What it is |
+|---|---|---|
+| `appleID` | string | The Apple ID, as typed, in lowercase |
+| `password` | string | Its password |
+| `teamID` | string | The Apple ID's team |
+| `certificate` | data | The development certificate, DER |
+| `privateKey` | data | Its RSA key, PKCS#8 DER |
+| `machineName` | string | What Apple lists the certificate as made on |
+| `machineID` | string | The machine ID Apple lists for the certificate |
+| `serialNumber` | string | The certificate's serial number |
+| `udid` | string | The iPhone's UDID, which the program registered in the team |
+| `anisetteServer` | string | The URL of the anisette v3 server the sign-in went through |
+| `anisetteState` | data | That server's provisioned state, as isideload keeps it: an XML plist with `keychain_identifier` (16 bytes, the machine's identity, from which its device ID and `X-Apple-I-MD-LU` come) and `adi_pb` (the provisioning, which the server's `get_headers` takes) |
 
 ## Building and testing
 
