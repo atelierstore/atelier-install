@@ -15,7 +15,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # github.workflow is the caller's when release.yml runs this, so a
+  # release's tests don't wait behind main's own run of them.
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   # A pull request's newer push replaces its older run; main's and a
   # release's runs always finish.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

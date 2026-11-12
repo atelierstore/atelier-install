@@ -28,7 +28,7 @@ These aren't vulnerabilities in atelier-install:
 
 ## Checking a download
 
-Each release lists `atelier-install.wasm`'s SHA-256, and GitHub keeps signed build provenance for it, which says that this repo's release workflow built it, from which commit and tag. To check it with GitHub's CLI:
+Each release lists `atelier-install.wasm`'s SHA-256, and GitHub keeps signed build provenance for it, which says that this repo's release workflow built it, from which commit. To check it with GitHub's CLI:
 
 ```sh
 gh attestation verify atelier-install.wasm --repo atelierstore/atelier-install
