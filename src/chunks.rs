@@ -27,7 +27,7 @@ pub const MOST_WRITTEN: usize = 256 * 1024;
 
 #[cfg(target_os = "wasi")]
 mod wasi {
-    use std::ffi::c_int;
+    use std::ffi::{c_int, c_void};
 
     use super::{MOST_READ, MOST_WRITTEN};
 
@@ -115,8 +115,8 @@ mod wasi {
     ///
     /// As `read`: `buf` holds `count` bytes.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn read(fd: c_int, buf: *mut u8, count: usize) -> isize {
-        unsafe { read_into(fd, buf, count) }
+    pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isize {
+        unsafe { read_into(fd, buf.cast(), count) }
     }
 
     /// POSIX's `readv`, in place of wasi-libc's: into the first buffer with
@@ -140,8 +140,8 @@ mod wasi {
     ///
     /// As `write`: `buf` holds `count` bytes.
     #[unsafe(no_mangle)]
-    pub unsafe extern "C" fn write(fd: c_int, buf: *const u8, count: usize) -> isize {
-        unsafe { write_from(fd, buf, count) }
+    pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> isize {
+        unsafe { write_from(fd, buf.cast(), count) }
     }
 
     /// POSIX's `writev`, in place of wasi-libc's: from the first buffer
