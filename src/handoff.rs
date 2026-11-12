@@ -106,7 +106,7 @@ impl HandOffs {
                     "your Apple ID, its password and this program's certificate, which let it sign in to Apple as you and sign apps"
                 }
                 Format::Token => {
-                    "your Apple ID, Apple's token for this sign-in (not the password) and this program's certificate, which let it use Apple's developer services as you and sign apps, until Apple ends the token"
+                    "your Apple ID, Apple's token for this sign-in (not the password) and this program's certificate, which let it use Apple's developer services as you and sign apps, until the token expires"
                 }
             });
         }
