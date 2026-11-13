@@ -72,15 +72,15 @@ You need:
 - rootshell, from the App Store, with Location Diary Mode on and set to Session Only, and Terminal Notifications on, both in its Settings › General. Session Only goes off when rootshell closes, so turn it on again before a later run.
 - An Apple ID. With a free one, apps open for 7 days.
 
-In rootshell, run these one line at a time:
+In rootshell, run this line:
 
 ```sh
-curl -fsSLO https://github.com/atelierstore/atelier-install/releases/latest/download/atelier-install.wasm
-ifconfig en0 > ifconfig.txt
-./atelier-install.wasm --ipa https://example.com/App.ipa --sha256 <the IPA's SHA-256>
+true && curl -fsSLO https://github.com/atelierstore/atelier-install/releases/latest/download/atelier-install.wasm && ifconfig en0 > ifconfig.txt && ./atelier-install.wasm --ipa https://example.com/App.ipa --sha256 <the IPA's SHA-256>
 ```
 
-You only need `ifconfig.txt` the first time, to pair. Without `--ipa`, the program installs the IPA in rootshell's folder.
+It downloads the program's latest release, saves the iPhone's Wi-Fi address in `ifconfig.txt` for pairing, and runs the program. It starts with `true` so that rootshell runs the whole line itself: rootshell starts a `.wasm` program after `&&` only when the line starts with one of its own commands, such as `true`. To install Atelier, [atelierstore.app/apple-id](https://atelierstore.app/apple-id) fills in this line with Atelier's newest release and its SHA-256.
+
+Later, `./atelier-install.wasm` and its options alone run the program again. You only need `ifconfig.txt` the first time, to pair. Without `--ipa`, the program installs the IPA in rootshell's folder.
 
 When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › Developer Mode, and type the code the program shows. The code also comes as a notification. Then connect LocalDevVPN and come back to rootshell. The program says what the install takes from your Apple ID, such as a certificate, and asks before it goes on. At Apple's limit of certificates, it asks which one to revoke. It never revokes one by itself. Stay in rootshell while it installs. Then trust your Apple ID in Settings › General › VPN & Device Management, and open the app. This build doesn't renew it: run it again before the 7 days are over.
 
