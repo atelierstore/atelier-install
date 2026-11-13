@@ -16,7 +16,8 @@
 //! 7. hands the app what it takes (`handoff.rs`): what its Info.plist
 //!    declares, once the user said yes, or, for Atelier, the pairing, and,
 //!    when Atelier takes them, the certificate it's signed with and the
-//!    sign-in, so that it opens signed in (`certificate.rs`).
+//!    sign-in, with the password or Apple's token, as it takes it, so that
+//!    it opens signed in (`certificate.rs`).
 //!    It deletes its own copy of the pairing once the app has it.
 //!
 //! What a step makes is kept until the install's done (`kept.rs`), so a run
@@ -70,6 +71,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use isideload::dev::developer_session::DeveloperSession;
 
+use crate::certificate::{Format, Secret};
 use crate::handoff::HandOffs;
 use crate::pairing::Pairing;
 use crate::state::{AppleIdHash, State};
@@ -403,7 +405,7 @@ fn install(
     // Kept with what the app takes, so that a run stopped from here on goes
     // on from here.
     let (signing, signing_problem) = match &ipa.hand_offs.signing {
-        Some(_) => match signing_file(&signed, &account, state, udid) {
+        Some(_) => match signing_file(&signed, account, ipa.hand_offs.format, state, udid) {
             Ok(file) => (Some(file), None),
             Err(why) => (None, Some(why)),
         },
@@ -593,32 +595,49 @@ fn hand_over(
 struct Account {
     /// What the sign-in and the signing key are kept under.
     hash: AppleIdHash,
-    /// The Apple ID and password, when they were typed: not when the run
-    /// signed in with the token the last one kept.
-    typed: Option<(String, String)>,
-    /// The anisette server the sign-in went through.
-    server: String,
+    /// The Apple ID, when it was asked for: not when the run signed in with
+    /// the one token kept, which only goes for an app that takes no sign-in.
+    email: Option<String>,
+    /// The password, when it was asked for: not when the run signed in with
+    /// the token the last one kept.
+    password: Option<String>,
+    /// Apple's token for the sign-in, with the anisette server it went
+    /// through.
+    token: Token,
+}
+
+/// Whether a run may sign in with a kept token, and whether with the one
+/// kept for a single Apple ID, without asking for it. `takes`: the format
+/// of the hand-off, when the app takes the sign-in.
+fn token_use(options: &Options, takes: Option<Format>) -> (bool, bool) {
+    // --sign-in checks the password, and an app that takes it in version 1
+    // of the hand-off takes it.
+    let with_token = !options.sign_in && takes != Some(Format::Password);
+    // An app that takes the sign-in takes the Apple ID with it.
+    let without_asking = with_token && takes.is_none() && !options.other_apple_id;
+    (with_token, without_asking)
 }
 
 /// Signs in to Apple: with the token the last sign-in kept, when there's
 /// one and Apple takes it, otherwise with the Apple ID and password. When
-/// one Apple ID has a token kept, it goes without asking for it.
+/// one Apple ID has a token kept, and no app takes the sign-in, which would
+/// name the Apple ID, it goes without asking for it.
 /// `takes_it`, the app that takes the sign-in once it's installed, which
-/// takes the password with it.
+/// takes the password with it in version 1 of the hand-off, and the token
+/// in its place in version 2.
 fn sign_in(
     options: &Options,
     state: &State,
     takes_it: Option<&ipa::Ipa>,
 ) -> Result<(DeveloperSession, Account), Stop> {
-    // --sign-in checks the password.
-    let with_token = takes_it.is_none() && !options.sign_in;
+    let (with_token, without_asking) = token_use(options, takes_it.map(|ipa| ipa.hand_offs.format));
     let anisette = options.anisette.as_deref();
     let kept_one = match Token::kept(state, kept::now()).as_slice() {
-        [one] if with_token && !options.other_apple_id => Some(one.clone()),
+        [one] if without_asking => Some(one.clone()),
         _ => None,
     };
     if let Some(hash) = &kept_one
-        && let Some((developer, server)) =
+        && let Some((developer, token)) =
             wait(async { Ok(apple::kept_sign_in(state, hash, anisette).await) })?
     {
         terminal::say("Signed in.");
@@ -627,8 +646,9 @@ fn sign_in(
             developer,
             Account {
                 hash: hash.clone(),
-                typed: None,
-                server,
+                email: None,
+                password: None,
+                token,
             },
         ));
     }
@@ -640,7 +660,7 @@ fn sign_in(
     // Not again, when it was just tried.
     if with_token
         && kept_one.as_ref() != Some(&hash)
-        && let Some((developer, server)) =
+        && let Some((developer, token)) =
             wait(async { Ok(apple::kept_sign_in(state, &hash, anisette).await) })?
     {
         terminal::say("Signed in.");
@@ -648,12 +668,20 @@ fn sign_in(
             developer,
             Account {
                 hash,
-                typed: None,
-                server,
+                email: Some(email),
+                password: None,
+                token,
             },
         ));
     }
     match takes_it {
+        Some(ipa) if ipa.hand_offs.format == Format::Token => {
+            terminal::say(format!(
+                "The password only goes to Apple. {} gets Apple's token for this sign-in,",
+                ipa.name
+            ));
+            terminal::say("not the password. Apple may ask for a code.");
+        }
         Some(ipa) if ipa.bundle_id == ipa::ATELIER => {
             terminal::say(
                 "The password goes to Apple, and to Atelier on this iPhone, which keeps it",
@@ -677,7 +705,7 @@ fn sign_in(
     terminal::say("If nothing more shows within a minute, a server isn't answering: press");
     terminal::say("Control-C, and run this again, which tries that server last.");
     let servers = wait(async { Ok(apple::servers(state, options.anisette.as_deref()).await) })?;
-    let (developer, server, kept) = wait(apple::sign_in(state, &servers, &email, &password))?;
+    let (developer, token, kept) = wait(apple::sign_in(state, &servers, &email, &password))?;
     terminal::say("Signed in.");
     if kept {
         terminal::say(
@@ -690,8 +718,9 @@ fn sign_in(
         developer,
         Account {
             hash,
-            typed: Some((email, password)),
-            server,
+            email: Some(email),
+            password: Some(password),
+            token,
         },
     ))
 }
@@ -699,30 +728,41 @@ fn sign_in(
 /// What to do when Atelier doesn't get the sign-in.
 const YOURSELF: &str = "Sign in to Atelier yourself: it then makes a certificate of its own.";
 
-/// The certificate and the sign-in, for an app that takes them
-/// (certificate.rs), or why there's none to hand over.
+/// The certificate and the sign-in, in `format`, for an app that takes
+/// them (certificate.rs), or why there's none to hand over.
 fn signing_file(
     signed: &apple::Signed,
-    account: &Account,
+    account: Account,
+    format: Format,
     state: &State,
     udid: &str,
 ) -> Result<Vec<u8>, String> {
     let Some(certificate) = &signed.certificate else {
         return Err("Apple doesn't list the certificate this program signed with.".into());
     };
-    let Some((email, password)) = &account.typed else {
-        return Err("This run signed in without the password.".into());
+    // Asked for whenever an app takes the sign-in.
+    let apple_id = account
+        .email
+        .ok_or("This run signed in without asking for the Apple ID.")?;
+    let server = account.token.server.clone();
+    let secret = match format {
+        Format::Password => Secret::Password(
+            account
+                .password
+                .ok_or("This run signed in without the password.")?,
+        ),
+        Format::Token => Secret::Token(account.token),
     };
     let anisette_state =
-        certificate::anisette_state(&state.anisette(&account.server)).map_err(|error| {
+        certificate::anisette_state(&state.anisette(&server)).map_err(|error| {
             terminal::log(format!("reading the anisette state: {error}"));
             "Couldn't read the sign-in's anisette state.".to_string()
         })?;
     let sign_in = certificate::SignIn {
-        apple_id: email.clone(),
-        password: password.clone(),
+        apple_id,
+        secret,
         udid: udid.to_string(),
-        anisette_server: account.server.clone(),
+        anisette_server: server,
         anisette_state,
     };
     Ok(certificate.hand_off(&sign_in))
@@ -837,6 +877,19 @@ mod tests {
         assert!(options(&["--redo"]).unwrap().redo);
         assert!(options(&["--other-apple-id"]).unwrap().other_apple_id);
         assert!(options(&["-h"]).unwrap().help);
+    }
+
+    #[test]
+    fn asks_for_the_apple_id_when_the_app_takes_the_sign_in() {
+        let none = options(&[]).unwrap();
+        assert_eq!(token_use(&none, None), (true, true));
+        assert_eq!(token_use(&none, Some(Format::Token)), (true, false));
+        assert_eq!(token_use(&none, Some(Format::Password)), (false, false));
+        let other = options(&["--other-apple-id"]).unwrap();
+        assert_eq!(token_use(&other, None), (true, false));
+        let check = options(&["--sign-in"]).unwrap();
+        assert_eq!(token_use(&check, None), (false, false));
+        assert_eq!(token_use(&check, Some(Format::Token)), (false, false));
     }
 
     #[test]

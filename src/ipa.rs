@@ -292,6 +292,7 @@ pub(crate) mod tests {
                 hand_offs: HandOffs {
                     pairing: Some(crate::handoff::ATELIER_PAIRING.to_string()),
                     signing: None,
+                    format: Default::default(),
                 },
                 refused: None,
             }
