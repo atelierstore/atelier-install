@@ -306,15 +306,19 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
     };
 
     terminal::step(2, steps, "This iPhone, through LocalDevVPN");
+    page::paired();
     // The page checks whether LocalDevVPN is connected, so it asks for it
     // whenever it isn't, and only then.
     if paired_now || page::on() {
         vpn_on()?;
     }
-    page::show(View::Busy {
-        title: "Connecting to this iPhone".into(),
-        bar: None,
-    });
+    let connecting = || {
+        page::show(View::Busy {
+            title: "Connecting to this iPhone".into(),
+            bar: None,
+        })
+    };
+    connecting();
     let port = options.port.or(state.port()).unwrap_or(phone::DEFAULT_PORT);
     let phone = match reach(&mut pairing, port) {
         // A pairing the iPhone has forgotten, as when it's been reset, or
@@ -324,7 +328,9 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
             terminal::say("This iPhone doesn't know the pairing any more, so it pairs anew.");
             pairing = pairing::pair(state, options.address.as_deref())?;
             paired_now = true;
+            page::paired();
             vpn_on()?;
+            connecting();
             reach(&mut pairing, port)
         }
         reached => reached,
@@ -594,7 +600,7 @@ fn install_app(
                     page::ask(View::Question {
                         title: "The connection to this iPhone broke".into(),
                         text: vec![
-                            "It can break while rootshell isn't on screen. Atelier is signed already, so trying again only installs it.".into(),
+                            "Check that LocalDevVPN is connected. Atelier is signed already, so trying again only installs it.".into(),
                         ],
                         options: Vec::new(),
                         yes: "Try again".into(),

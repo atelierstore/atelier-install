@@ -117,11 +117,9 @@
         break;
       }
       case "code":
-        // Not drawn yet: a code by text message.
+        // A text comes on this iPhone, and its keyboard offers the code.
         if (view.texted !== null) {
-          say(root, "sent", view.texted
-            ? `Apple texted a six-digit code to ${view.texted}. When it comes, note it, then come back here.`
-            : "Apple texted a six-digit code. When it comes, note it, then come back here.");
+          say(root, "sent", `Apple texted a six-digit code to ${view.texted || "your phone"}. Enter it here when it comes.`);
         }
         root.querySelector('[data-action="text"]').hidden = !view.by_text;
         root.querySelector('[data-action="devices"]').hidden = !view.to_devices;
@@ -188,20 +186,20 @@
           if (!input.disabled) typed[input.name] = input.value;
         }
         if (view.screen === "code") typed.code = typed.code.replace(/\D/g, "");
-        answer(typed);
+        answer(typed, form.querySelector('button[type="submit"]'));
       });
     }
     const digits = card.querySelector(".digits-box input");
     if (digits) wireDigits(digits);
     for (const button of card.querySelectorAll("[data-action]")) {
-      button.addEventListener("click", () => answer({ action: button.dataset.action }));
+      button.addEventListener("click", () => answer({ action: button.dataset.action }, button));
     }
     for (const button of card.querySelectorAll("[data-answer]")) {
       button.addEventListener("click", () => {
-        if (button.dataset.answer === "no") return answer({ yes: false });
+        if (button.dataset.answer === "no") return answer({ yes: false }, button);
         const picked = card.querySelector('input[name="pick"]:checked');
         if (view.options && view.options.length && !picked) return;
-        answer(picked ? { yes: true, pick: Number(picked.value) } : { yes: true });
+        answer(picked ? { yes: true, pick: Number(picked.value) } : { yes: true }, button);
       });
     }
   }
@@ -233,10 +231,17 @@
     }
   }
 
-  function answer(fields) {
+  /** Sends `fields` as the answer; `button`, the one tapped, waits meanwhile. */
+  function answer(fields, button) {
     if (sending || !shown || !shown.asking) return;
     sending = true;
     busy(true);
+    button.classList.add("working");
+    const again = () => {
+      sending = false;
+      busy(false);
+      button.classList.remove("working");
+    };
     const seq = shown.seq;
     fetch("/answer", {
       method: "POST",
@@ -246,16 +251,10 @@
     })
       .then((response) => response.json())
       .then((reply) => {
-        if (!reply.taken && shown && shown.seq === seq) {
-          sending = false;
-          busy(false);
-        }
+        if (!reply.taken && shown && shown.seq === seq) again();
       })
       .catch(() => {
-        if (shown && shown.seq === seq) {
-          sending = false;
-          busy(false);
-        }
+        if (shown && shown.seq === seq) again();
       });
   }
 

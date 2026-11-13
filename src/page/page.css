@@ -89,6 +89,10 @@ p { margin: 0; }
 .btn:disabled { opacity: .55; cursor: default; transform: none; }
 .btn-primary { background: var(--btn); color: var(--btn-ink); }
 .btn-secondary { color: var(--ink); border-color: var(--line-strong); background: transparent; }
+/* The one tapped, while the installer takes its answer. */
+.btn.working:disabled { opacity: 1; }
+.btn.working::after { content: ""; flex: none; width: 15px; height: 15px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(1turn); } }
 
 /* The page */
 .inst {
@@ -178,4 +182,5 @@ p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   .btn, .bar i { transition: none; }
   .wait::before { animation: none; }
+  .btn.working::after { animation: none; border-right-color: currentColor; opacity: .6; }
 }

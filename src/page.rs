@@ -275,12 +275,48 @@ pub fn tick() {
     });
 }
 
+/// Once the iPhone is paired, now or before: the stepper shows pairing
+/// done from the next view on.
+pub fn paired() {
+    with(|page| page.stage = page.stage.max(1));
+}
+
 /// Shows why the program stopped.
 pub fn stopped(stop: &Stop) {
-    show(View::Stopped {
-        what: format!("{}.", stop.what.trim_end_matches('.')),
-        next: stop.next.clone(),
-    });
+    show(stopped_view(stop));
+}
+
+/// The terminal's words for a stop, as the page says them: under its title,
+/// "The install stopped", and with the Shortcut to run it again, which
+/// takes no options.
+fn stopped_view(stop: &Stop) -> View {
+    let what = stop.what.trim_end_matches('.');
+    let what = match what.strip_prefix("Stopped: ") {
+        Some(rest) => {
+            let mut letters = rest.chars();
+            letters
+                .next()
+                .map(|first| first.to_uppercase().chain(letters).collect())
+                .unwrap_or_default()
+        }
+        None => what.to_string(),
+    };
+    let next = stop
+        .next
+        .iter()
+        .map(|line| {
+            let line = match line.split_once(", or with --") {
+                Some((before, _)) => format!("{before}."),
+                None => line.clone(),
+            };
+            line.replace("Run this again", "Run the Shortcut again")
+                .replace("run this again", "run the Shortcut again")
+        })
+        .collect();
+    View::Stopped {
+        what: format!("{what}."),
+        next,
+    }
 }
 
 /// Before the program ends: answers the page until it has the last view,
@@ -689,6 +725,37 @@ mod tests {
         assert_eq!(state["stage"], 2);
         assert_eq!(state["view"]["bar"]["percent"], 50);
         PAGE.set(None);
+    }
+
+    #[test]
+    fn says_a_stop_as_the_page_does() {
+        let said = |stop: Stop| match stopped_view(&stop) {
+            View::Stopped { what, next } => (what, next),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            said(Stop::new("Stopped: nothing was signed or installed")),
+            ("Nothing was signed or installed.".into(), vec![])
+        );
+        assert_eq!(
+            said(
+                Stop::new("The iPhone didn't install it: no reason given.").next(
+                    "Run this again to try the install again, or with --redo to sign it anew first."
+                )
+            ),
+            (
+                "The iPhone didn't install it: no reason given.".into(),
+                vec!["Run the Shortcut again to try the install again.".into()]
+            )
+        );
+        assert_eq!(
+            said(
+                Stop::new("LocalDevVPN isn't connected")
+                    .next("Open LocalDevVPN and tap Connect, on Wi-Fi, then run this again.")
+            )
+            .1,
+            vec!["Open LocalDevVPN and tap Connect, on Wi-Fi, then run the Shortcut again."]
+        );
     }
 
     #[test]
