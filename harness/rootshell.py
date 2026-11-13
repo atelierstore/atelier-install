@@ -77,7 +77,13 @@ HELPER = """
     (func $rmdir (param i32 i32 i32) (result i32)))
   (import "wasi_snapshot_preview1" "path_rename"
     (func $rename (param i32 i32 i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_readdir"
+    (func $readdir (param i32 i32 i32 i64 i32) (result i32)))
   (memory (export "memory") 1)
+  (func (export "readdir") (param $fd i32) (param $length i32) (param $cookie i64)
+    (result i32)
+    (call $readdir (local.get $fd) (i32.const 0x8100) (local.get $length)
+      (local.get $cookie) (i32.const 8)))
   (func (export "read") (param $fd i32) (param $length i32) (result i32)
     (i32.store (i32.const 0) (i32.const 0x8100))
     (i32.store (i32.const 4) (local.get $length))
@@ -491,7 +497,56 @@ def main():
         memory.u32(read_out, read)
         return 0
 
+    def fd_readdir(caller, fd, buf, buf_len, _cookie, used_out):
+        # rootshell's broker lists the folder anew with FileManager, which
+        # leaves out . and .., and its runtime writes whole entries from the
+        # first, numbered from 1, whatever the cookie: a listing longer than
+        # the reader's buffer never reads as done (rootshell's
+        # Resources/Wasm/wasm-worker.js, fd_readdir).
+        chunk = 0x10000
+        pages = (READ_AT + chunk + 0xFFFF) // 0x10000
+        if helper_memory.size(caller) < pages:
+            helper_memory.grow(caller, pages - helper_memory.size(caller))
+        entries, cookie = [], 0
+        while True:
+            error = helper_calls["readdir"](caller, fd, chunk, cookie)
+            if error != 0:
+                return error
+            used = int.from_bytes(helper_memory.read(caller, 8, 12), "little")
+            data = bytes(helper_memory.read(caller, READ_AT, READ_AT + used))
+            at = 0
+            while at + 24 <= used:
+                size = int.from_bytes(data[at + 16:at + 20], "little")
+                if at + 24 + size > used:
+                    break
+                name = data[at + 24:at + 24 + size]
+                cookie = int.from_bytes(data[at:at + 8], "little")
+                if name not in (b".", b".."):
+                    entries.append((name, data[at + 20] == 3))
+                at += 24 + size
+            if used < chunk:
+                break
+        memory = Memory(caller)
+        at = buf
+        for index, (name, is_dir) in enumerate(entries):
+            if at + 24 + len(name) > buf + buf_len:
+                break
+            entry = (index + 1).to_bytes(8, "little") * 2
+            entry += len(name).to_bytes(4, "little") + bytes([3 if is_dir else 4]) + bytes(3)
+            memory.write(at, entry + name)
+            at += 24 + len(name)
+        memory.u32(used_out, at - buf)
+        return 0
+
     linker.allow_shadowing = True
+    i64 = wasmtime.ValType.i64()
+    linker.define_func(
+        "wasi_snapshot_preview1",
+        "fd_readdir",
+        wasmtime.FuncType([i32, i32, i32, i64, i32], [i32]),
+        fd_readdir,
+        access_caller=True,
+    )
     for name, call, count in [
         ("fd_read", fd_read, 4),
         ("path_create_directory", path_create_directory, 3),
