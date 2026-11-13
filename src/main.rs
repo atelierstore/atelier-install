@@ -72,8 +72,9 @@ use isideload::dev::developer_session::DeveloperSession;
 
 use crate::handoff::HandOffs;
 use crate::pairing::Pairing;
-use crate::state::State;
+use crate::state::{AppleIdHash, State};
 use crate::terminal::Stop;
+use crate::token::Token;
 
 /// The system's, checking in with rootshell every so often (`awake.rs`).
 #[global_allocator]
@@ -98,6 +99,8 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
   --pairing-to <path> where the app takes this iPhone's pairing, in its
                       container, when its Info.plist doesn't say (it's asked)
   --redo              sign the IPA anew, where a run that stopped would go on
+  --other-apple-id    ask for the Apple ID, where the program would sign in
+                      with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
 ";
 
@@ -115,6 +118,7 @@ struct Options {
     redo: bool,
     check: bool,
     sign_in: bool,
+    other_apple_id: bool,
     forget: bool,
     help: bool,
 }
@@ -128,6 +132,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             "-h" | "--help" | "help" => options.help = true,
             "--check" => options.check = true,
             "--sign-in" => options.sign_in = true,
+            "--other-apple-id" => options.other_apple_id = true,
             "--forget" => options.forget = true,
             "--redo" => options.redo = true,
             "--ipa" => options.ipa = Some(value("--ipa")?),
@@ -389,7 +394,7 @@ fn install(
     let signed = wait(apple::sign(
         state,
         developer,
-        &account.email,
+        &account.hash,
         ipa,
         phone_name,
         udid,
@@ -583,17 +588,21 @@ fn hand_over(
     }
 }
 
-/// What the app that takes the sign-in signs in with.
+/// Whom the run signed in as, and what the app that takes the sign-in
+/// signs in with.
 struct Account {
-    email: String,
-    /// None when the run signed in with the token the last one kept.
-    password: Option<String>,
+    /// What the sign-in and the signing key are kept under.
+    hash: AppleIdHash,
+    /// The Apple ID and password, when they were typed: not when the run
+    /// signed in with the token the last one kept.
+    typed: Option<(String, String)>,
     /// The anisette server the sign-in went through.
     server: String,
 }
 
-/// Asks for the Apple ID and signs in to Apple: with the token the last
-/// sign-in kept, when there's one and it does, otherwise with the password.
+/// Signs in to Apple: with the token the last sign-in kept, when there's
+/// one and Apple takes it, otherwise with the Apple ID and password. When
+/// one Apple ID has a token kept, it goes without asking for it.
 /// `takes_it`, the app that takes the sign-in once it's installed, which
 /// takes the password with it.
 fn sign_in(
@@ -601,27 +610,48 @@ fn sign_in(
     state: &State,
     takes_it: Option<&ipa::Ipa>,
 ) -> Result<(DeveloperSession, Account), Stop> {
+    // --sign-in checks the password.
+    let with_token = takes_it.is_none() && !options.sign_in;
+    let anisette = options.anisette.as_deref();
+    let kept_one = match Token::kept(state, kept::now()).as_slice() {
+        [one] if with_token && !options.other_apple_id => Some(one.clone()),
+        _ => None,
+    };
+    if let Some(hash) = &kept_one
+        && let Some((developer, server)) =
+            wait(async { Ok(apple::kept_sign_in(state, hash, anisette).await) })?
+    {
+        terminal::say("Signed in.");
+        terminal::say("./atelier-install.wasm --other-apple-id signs in with another Apple ID.");
+        return Ok((
+            developer,
+            Account {
+                hash: hash.clone(),
+                typed: None,
+                server,
+            },
+        ));
+    }
     let email = terminal::ask("Apple ID: ")?.to_lowercase();
     if email.is_empty() {
         return Err(Stop::new("Stopped: no Apple ID was given"));
     }
-    // --sign-in checks the password.
-    if takes_it.is_none() && !options.sign_in {
-        let anisette = options.anisette.as_deref();
-        if let Some((developer, server)) =
-            wait(async { Ok(apple::kept_sign_in(state, &email, anisette).await) })?
-        {
-            terminal::say("Signed in.");
-            let password = None;
-            return Ok((
-                developer,
-                Account {
-                    email,
-                    password,
-                    server,
-                },
-            ));
-        }
+    let hash = AppleIdHash::of(&email);
+    // Not again, when it was just tried.
+    if with_token
+        && kept_one.as_ref() != Some(&hash)
+        && let Some((developer, server)) =
+            wait(async { Ok(apple::kept_sign_in(state, &hash, anisette).await) })?
+    {
+        terminal::say("Signed in.");
+        return Ok((
+            developer,
+            Account {
+                hash,
+                typed: None,
+                server,
+            },
+        ));
     }
     match takes_it {
         Some(ipa) if ipa.bundle_id == ipa::ATELIER => {
@@ -659,8 +689,8 @@ fn sign_in(
     Ok((
         developer,
         Account {
-            email,
-            password: Some(password),
+            hash,
+            typed: Some((email, password)),
             server,
         },
     ))
@@ -680,7 +710,7 @@ fn signing_file(
     let Some(certificate) = &signed.certificate else {
         return Err("Apple doesn't list the certificate this program signed with.".into());
     };
-    let Some(password) = &account.password else {
+    let Some((email, password)) = &account.typed else {
         return Err("This run signed in without the password.".into());
     };
     let anisette_state =
@@ -689,7 +719,7 @@ fn signing_file(
             "Couldn't read the sign-in's anisette state.".to_string()
         })?;
     let sign_in = certificate::SignIn {
-        apple_id: account.email.clone(),
+        apple_id: email.clone(),
         password: password.clone(),
         udid: udid.to_string(),
         anisette_server: account.server.clone(),
@@ -805,6 +835,7 @@ mod tests {
         assert!(options(&["--sign-in"]).unwrap().sign_in);
         assert!(options(&["--forget"]).unwrap().forget);
         assert!(options(&["--redo"]).unwrap().redo);
+        assert!(options(&["--other-apple-id"]).unwrap().other_apple_id);
         assert!(options(&["-h"]).unwrap().help);
     }
 

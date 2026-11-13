@@ -30,6 +30,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 #[derive(Clone)]
 pub struct State {
     folder: PathBuf,
@@ -209,6 +211,31 @@ pub fn files_folder() -> PathBuf {
 pub fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let _ = fs::remove_file(path);
     fs::write(path, bytes)
+}
+
+/// What an Apple ID's sign-in and signing key are kept under: a hash of
+/// it, so that no file names it. A run that reuses the one kept sign-in
+/// finds it by this alone, without the Apple ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppleIdHash(String);
+
+impl AppleIdHash {
+    pub fn of(apple_id: &str) -> AppleIdHash {
+        AppleIdHash(hex::encode(Sha256::digest(apple_id.as_bytes())))
+    }
+
+    /// A folder's name that's one, as `of` makes them.
+    pub fn from_name(name: &str) -> Option<AppleIdHash> {
+        (name.len() == 64
+            && name
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
+        .then(|| AppleIdHash(name.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]
