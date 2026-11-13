@@ -10,7 +10,8 @@ rootshell's programs have one thread and no async runtime, and rootshell does TL
 - **Unpacking the IPA** (`src/sideload/application.rs`): zip's `extract` only knows directory entries on Unix and Windows, and on WASI makes a file of each, so the next entry inside one fails. This copy unpacks entry by entry through isideload's VFS, refuses symbolic links and entries that would land outside the folder, and writes a megabyte at a time.
 - **Uploads**: AFC chunks of 1 MB, as on any computer, unless the `wasm` feature (a browser's) asks for the small ones.
 - **Signing** (`Cargo.toml`): apple-codesign-quick from `../apple-codesign-quick`, which checks in with rootshell as it hashes (see its README).
-- **Tests** for the HTTP client, the WebSocket and the unpacking.
+- **Codes by text** (`src/auth/apple_account.rs`): an account that takes its codes by text got two texts, with different codes. The first came, it seems, when isideload asks for the trusted numbers (`GET /auth`), and the second when it asks for a text (`PUT /auth/verify/phone`). When Apple's answer with the trusted numbers says in full that a code was texted, in the shape of its answer for a challenge that's still active, this copy asks for that code and sends no second text. Otherwise it's as published, and `ResendCode` asks for another text as before. The answer's field names, without the numbers, reach the program as `TwoFactorCallbackParams::first_answer`, for its log.
+- **Tests** for the HTTP client, the WebSocket, the unpacking and the codes by text.
 
 Everything else is as published. On WASI, apple-codesign-quick's rayon runs on the one thread, and its memmap2 falls back to reading the file. Signed under wasmtime, Atelier's IPA comes out byte for byte as signed natively.
 

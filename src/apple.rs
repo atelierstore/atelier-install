@@ -369,6 +369,19 @@ fn ask_code(params: &TwoFactorCallbackParams, cancelled: &AtomicBool) -> TwoFact
     if let Some(error) = &params.last_error {
         terminal::say(error);
     }
+    // Whether Apple texts a code as it gives the trusted numbers, and says
+    // so, which spares a second text with another code; the fields alone,
+    // without the numbers.
+    if let Some(first) = &params.first_answer {
+        let said = match first.text_sent_to {
+            Some(_) => "says a code was texted",
+            None => "doesn't say a code was texted",
+        };
+        terminal::log(format!(
+            "Apple's first answer {said}: {}",
+            first.fields.join(", ")
+        ));
+    }
     let selected = params
         .selected_number_id
         .and_then(|id| params.numbers.iter().find(|number| number.id == id))
