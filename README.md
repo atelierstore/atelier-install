@@ -2,8 +2,6 @@
 
 atelier-install installs an app on the iPhone it runs on, signed with your free Apple ID, with nothing but App Store apps on that iPhone. It's one WebAssembly program of about 3 MB that runs in [rootshell](https://apps.apple.com/app/rootshell-local-terminal-ssh/id6755794662), a terminal app on the App Store. It pairs the iPhone with itself, reaches the iPhone's own services through LocalDevVPN, another App Store app, signs in to Apple, signs the app, and installs it as Xcode installs a developer's app. It was made to install [Atelier](https://github.com/atelierstore/Atelier), and it installs any IPA.
 
-This is a test build. It has gone through all of its steps on an iPhone running iOS 27.2, installing Atelier.
-
 ## What it solves
 
 To install an app from outside the App Store with a free Apple ID, you need three things. Until now, an iPhone couldn't provide the first one by itself.
@@ -125,7 +123,7 @@ The program keeps the following in `.atelier`, in rootshell's folder, which File
 - each anisette server's state
 - an install that a run stopped before finishing, with the sign-in when the app takes it
 
-`--forget` deletes all of it. Each run's steps and errors go to `atelier-install.log` in rootshell's folder, never with the Apple ID, its password or a code.
+`--forget` deletes all of it once you type yes, after saying that the next run then needs a new certificate, which at Apple's limit means revoking one. Each run's steps and errors go to `atelier-install.log` in rootshell's folder, never with the Apple ID, its password or a code.
 
 ## For app developers: what your app takes
 

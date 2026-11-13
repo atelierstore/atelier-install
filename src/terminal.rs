@@ -159,6 +159,14 @@ pub fn ask(prompt: &str) -> Result<String, Stop> {
     read_line()
 }
 
+/// Asks for a line, with the prompt where a line starts, as --forget
+/// does. What's typed isn't logged.
+pub fn answer(prompt: &str) -> Result<String, Stop> {
+    print!("{prompt}");
+    let _ = io::stdout().flush();
+    read_line()
+}
+
 /// Asks a yes or no question; anything but a yes is a no.
 pub fn confirm(prompt: &str) -> Result<bool, Stop> {
     let answer = ask(&format!("{prompt} [y/N] "))?;
