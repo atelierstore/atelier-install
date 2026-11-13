@@ -654,7 +654,10 @@ pub async fn sign(
     terminal::say("Stay in rootshell until it's installed: in another app, it slows down,");
     terminal::say("and can lose its connection to this iPhone.");
     let progress = |fraction: f32| async move {
-        terminal::progress(format!("Signing: {}%", (fraction * 100.0) as u32));
+        terminal::bar(
+            f64::from(fraction),
+            format!("{}%", (fraction * 100.0) as u32),
+        );
     };
     let checked_in = awake::checked_in();
     let (app, _) = sideloader

@@ -154,10 +154,10 @@ fn download(state: &State, link: &str) -> Result<PathBuf, Stop> {
         if megabytes != shown {
             shown = megabytes;
             match total {
-                Some(total) if total > 0 => terminal::progress(format!(
-                    "Downloading: {megabytes} of {} MB",
-                    total.div_ceil(1 << 20)
-                )),
+                Some(total) if total > 0 => terminal::bar(
+                    received as f64 / total as f64,
+                    format!("{megabytes} of {} MB", total.div_ceil(1 << 20)),
+                ),
                 _ => terminal::progress(format!("Downloading: {megabytes} MB")),
             }
         }

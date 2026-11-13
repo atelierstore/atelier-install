@@ -467,7 +467,7 @@ fn install_app(
         let installed = phone.install(app, |percent| {
             awake::check_in();
             if shown.swap(percent, Ordering::Relaxed) != percent {
-                terminal::progress(format!("Installing: {percent}%"));
+                terminal::bar(percent as f64 / 100.0, format!("{percent}%"));
             }
         });
         terminal::log(format!(
