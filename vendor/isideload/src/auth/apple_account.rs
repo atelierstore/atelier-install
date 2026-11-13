@@ -33,6 +33,9 @@ pub struct AppleAccount {
     pub anisette_generator: AnisetteDataGenerator,
     pub grandslam_client: Arc<GrandSlam>,
     pub trusted_phone_numbers: Option<Vec<TrustedNumber>>,
+    /// What Apple answered when asked for the trusted numbers, until the
+    /// next code is asked for.
+    first_answer: Option<FirstAnswer>,
     login_state: LoginState,
     debug: bool,
     last_error: Option<String>,
@@ -69,6 +72,59 @@ pub struct TwoFactorCallbackParams {
     pub sms: bool,
     pub numbers: Vec<TrustedNumber>,
     pub selected_number_id: Option<u32>,
+    /// What Apple answered when asked for the trusted numbers, with the
+    /// first code asked for after it.
+    pub first_answer: Option<FirstAnswer>,
+}
+
+/// What Apple's answer to a request for the trusted numbers
+/// (`GET /auth`) said, without the numbers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FirstAnswer {
+    /// The trusted number Apple says it has sent a code to by text, when
+    /// the answer says so in full, as an active challenge does when asked
+    /// for another text (`SmsChallengeResponse`).
+    pub text_sent_to: Option<u32>,
+    /// The answer's fields, by name, with the values of those that hold
+    /// nothing personal: true or false, and `mode`, `type` and
+    /// `authenticationType`.
+    pub fields: Vec<String>,
+}
+
+impl FirstAnswer {
+    fn of(text: &str) -> Self {
+        let text_sent_to = serde_json::from_str::<SmsChallengeResponse>(text)
+            .ok()
+            .and_then(|challenge| challenge.texted());
+        let fields = match serde_json::from_str::<serde_json::Value>(text) {
+            Ok(serde_json::Value::Object(fields)) => fields
+                .iter()
+                .map(|(name, value)| match value {
+                    serde_json::Value::Bool(value) => format!("{name}={value}"),
+                    serde_json::Value::String(value)
+                        if matches!(name.as_str(), "mode" | "type" | "authenticationType") =>
+                    {
+                        format!("{name}={value}")
+                    }
+                    _ => name.clone(),
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        FirstAnswer {
+            text_sent_to,
+            fields,
+        }
+    }
+}
+
+/// The number Apple has already texted a code to, when it says so: an
+/// account that takes its codes by text seems to be sent one when its
+/// trusted numbers are first asked for, and asking for another sends a
+/// second text, with another code. Only from the answer to a request made just now
+/// (`fetched`): a later one says nothing new.
+fn already_texted(fetched: bool, answer: Option<&FirstAnswer>) -> Option<u32> {
+    answer.filter(|_| fetched)?.text_sent_to
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +170,28 @@ struct SmsSecurityCode {
     too_many_codes_validated: bool,
     security_code_locked: bool,
     security_code_cooldown: bool,
+}
+
+impl SmsChallengeResponse {
+    /// The trusted number a 6-digit code was texted to, when this says one
+    /// was and that it can still be entered.
+    fn texted(&self) -> Option<u32> {
+        let number = self.trusted_phone_number.id;
+        let code = &self.security_code;
+        (self.mode == "sms"
+            && self.challenge_type == "verification"
+            && self.authentication_type == "hsa2"
+            && self
+                .trusted_phone_numbers
+                .iter()
+                .any(|trusted| trusted.id == number)
+            && code.length == 6
+            && !code.too_many_codes_sent
+            && !code.too_many_codes_validated
+            && !code.security_code_locked
+            && !code.security_code_cooldown)
+            .then_some(number)
+    }
 }
 
 /// Extracts the resync SIM (base64 `X-Apple-I-MD-DATA`) from a GSA response that
@@ -173,6 +251,7 @@ impl AppleAccount {
             debug,
             login_state: LoginState::NeedsLogin,
             trusted_phone_numbers: None,
+            first_answer: None,
             last_error: None,
             err_429_retries,
         })
@@ -236,6 +315,7 @@ impl AppleAccount {
                         sms: false,
                         numbers: self.trusted_phone_numbers.clone().unwrap_or_default(),
                         selected_number_id: None,
+                        first_answer: self.first_answer.take(),
                     })
                     .await?;
                     self.last_error = None;
@@ -259,12 +339,18 @@ impl AppleAccount {
                     }
                 }
                 LoginState::NeedsSMS2FA(id) => {
-                    self.update_trusted_numbers().await;
+                    let fetched = self.update_trusted_numbers().await;
                     info!("SMS 2FA required");
-                    self.login_state = self
-                        .send_sms_2fa(id)
-                        .await
-                        .context("Failed to complete SMS 2FA")?;
+                    self.login_state = match already_texted(fetched, self.first_answer.as_ref()) {
+                        Some(texted) => {
+                            info!("SMS 2FA code already sent, proceeding to verification");
+                            LoginState::NeedsSMS2FAVerification(texted)
+                        }
+                        None => self
+                            .send_sms_2fa(id)
+                            .await
+                            .context("Failed to complete SMS 2FA")?,
+                    };
                 }
                 LoginState::NeedsSMS2FAVerification(id) => {
                     let response = two_factor_callback(TwoFactorCallbackParams {
@@ -273,6 +359,7 @@ impl AppleAccount {
                         sms: true,
                         numbers: self.trusted_phone_numbers.clone().unwrap_or_default(),
                         selected_number_id: Some(id),
+                        first_answer: self.first_answer.take(),
                     })
                     .await?;
                     self.last_error = None;
@@ -321,6 +408,7 @@ impl AppleAccount {
                         sms: false,
                         numbers: self.trusted_phone_numbers.clone().unwrap_or_default(),
                         selected_number_id: None,
+                        first_answer: self.first_answer.take(),
                     })
                     .await?;
                     self.last_error = None;
@@ -599,19 +687,7 @@ impl AppleAccount {
 
         if status == 412
             && let Ok(challenge) = serde_json::from_str::<SmsChallengeResponse>(text)
-            && challenge.mode == "sms"
-            && challenge.challenge_type == "verification"
-            && challenge.authentication_type == "hsa2"
-            && challenge.trusted_phone_number.id == requested_number_id
-            && challenge
-                .trusted_phone_numbers
-                .iter()
-                .any(|number| number.id == requested_number_id)
-            && challenge.security_code.length == 6
-            && !challenge.security_code.too_many_codes_sent
-            && !challenge.security_code.too_many_codes_validated
-            && !challenge.security_code.security_code_locked
-            && !challenge.security_code.security_code_cooldown
+            && challenge.texted() == Some(requested_number_id)
         {
             return Ok(SmsSendOutcome::ActiveChallenge);
         }
@@ -656,10 +732,13 @@ impl AppleAccount {
         })
     }
 
-    async fn update_trusted_numbers(&mut self) {
+    /// Asks Apple for the trusted numbers, unless it has them: whether it
+    /// asked.
+    async fn update_trusted_numbers(&mut self) -> bool {
         if self.trusted_phone_numbers.is_some() {
-            return;
+            return false;
         }
+        self.first_answer = None;
         match self.get_trusted_numbers().await {
             Ok(numbers) => {
                 self.trusted_phone_numbers = Some(numbers);
@@ -669,6 +748,7 @@ impl AppleAccount {
                 error!("Failed to retrieve trusted phone numbers:\n{}", report);
             }
         };
+        true
     }
 
     async fn get_trusted_numbers(&mut self) -> Result<Vec<TrustedNumber>, Report> {
@@ -690,6 +770,7 @@ impl AppleAccount {
             .text()
             .await
             .context("Failed to read SMS 2FA error response text")?;
+        self.first_answer = Some(FirstAnswer::of(&text));
         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text)
             && let Some(numbers) = json.get("trustedPhoneNumbers")
         {
@@ -1151,5 +1232,97 @@ fn censor_email(email: &str) -> String {
         }
     } else {
         "***".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An answer shaped as Apple's for an active challenge, with made-up
+    /// numbers.
+    fn answer(mode: &str, number: u32, cooldown: bool) -> String {
+        serde_json::json!({
+            "trustedPhoneNumbers": [
+                {"numberWithDialCode": "+1 (•••) •••-••01", "lastTwoDigits": "01", "pushMode": "sms", "id": 1},
+                {"numberWithDialCode": "+1 (•••) •••-••02", "lastTwoDigits": "02", "pushMode": "sms", "id": 2},
+            ],
+            "trustedPhoneNumber": {"numberWithDialCode": "+1 (•••) •••-••02", "lastTwoDigits": "02", "pushMode": "sms", "id": number},
+            "securityCode": {
+                "length": 6,
+                "tooManyCodesSent": false,
+                "tooManyCodesValidated": false,
+                "securityCodeLocked": false,
+                "securityCodeCooldown": cooldown,
+            },
+            "mode": mode,
+            "type": "verification",
+            "authenticationType": "hsa2",
+            "noTrustedDevices": true,
+            "recoveryUrl": "https://example.com/recover",
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn an_answer_that_says_a_code_was_texted_names_the_number() {
+        let first = FirstAnswer::of(&answer("sms", 2, false));
+        assert_eq!(first.text_sent_to, Some(2));
+        assert_eq!(already_texted(true, Some(&first)), Some(2));
+    }
+
+    #[test]
+    fn an_answer_that_doesnt_say_so_in_full_names_none() {
+        // Another way of sending, a code that can't be entered yet, a
+        // number that isn't a trusted one, and no answer worth the name.
+        assert_eq!(
+            FirstAnswer::of(&answer("voice", 2, false)).text_sent_to,
+            None
+        );
+        assert_eq!(FirstAnswer::of(&answer("sms", 2, true)).text_sent_to, None);
+        assert_eq!(FirstAnswer::of(&answer("sms", 3, false)).text_sent_to, None);
+        let mut fields: serde_json::Value = serde_json::from_str(&answer("sms", 2, false)).unwrap();
+        fields.as_object_mut().unwrap().remove("type");
+        assert_eq!(FirstAnswer::of(&fields.to_string()).text_sent_to, None);
+        assert_eq!(FirstAnswer::of("<html>"), FirstAnswer::default());
+        assert_eq!(already_texted(true, None), None);
+    }
+
+    #[test]
+    fn only_an_answer_just_asked_for_counts() {
+        let first = FirstAnswer::of(&answer("sms", 2, false));
+        assert_eq!(already_texted(false, Some(&first)), None);
+    }
+
+    #[test]
+    fn an_answers_fields_hold_nothing_personal() {
+        let first = FirstAnswer::of(&answer("sms", 2, false));
+        assert_eq!(
+            first.fields,
+            [
+                "authenticationType=hsa2",
+                "mode=sms",
+                "noTrustedDevices=true",
+                "recoveryUrl",
+                "securityCode",
+                "trustedPhoneNumber",
+                "trustedPhoneNumbers",
+                "type=verification",
+            ]
+        );
+    }
+
+    #[test]
+    fn another_text_isnt_sent_while_a_challenge_is_active() {
+        let active = answer("sms", 2, false);
+        assert!(matches!(
+            AppleAccount::classify_sms_send_response(412, &active, 2),
+            Ok(SmsSendOutcome::ActiveChallenge)
+        ));
+        assert!(AppleAccount::classify_sms_send_response(412, &active, 1).is_err());
+        assert!(matches!(
+            AppleAccount::classify_sms_send_response(200, "", 1),
+            Ok(SmsSendOutcome::Sent)
+        ));
     }
 }

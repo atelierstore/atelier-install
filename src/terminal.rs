@@ -42,8 +42,9 @@ static LOG: Mutex<Option<File>> = Mutex::new(None);
 static STARTED: OnceLock<Instant> = OnceLock::new();
 
 /// Starts the log at `path`, replacing the last run's. It holds the steps
-/// and the errors, never the Apple ID, its password, a code or the name of
-/// the Apple ID's owner.
+/// and the errors, never the Apple ID, its password, a code, the name of
+/// the Apple ID's owner, the iPhone's name, the team ID or a phone number
+/// (`say_personal`).
 pub fn start_log(path: &Path) {
     STARTED.get_or_init(Instant::now);
     let file = OpenOptions::new()
@@ -68,9 +69,11 @@ pub fn log(line: impl Display) {
 }
 
 /// Posts `text` as a notification, where rootshell sends those (its
-/// Settings › Terminal Notifications), for a user who's in another app, as
-/// in Settings to pair: the terminal takes OSC 777 for one and prints
-/// nothing. Not in the log, as it can hold the pairing's code.
+/// Settings › General › Terminal Notifications), for a user who's in
+/// another app, as in Settings to pair: the terminal takes OSC 777 for one
+/// and prints nothing. rootshell shows it only from the background, which
+/// takes Location Diary, or for a tab that isn't on screen. Not in the log,
+/// as it can hold the pairing's code.
 pub fn notify(text: &str) {
     print!("\x1b]777;notify;Atelier;{text}\x07");
     let _ = io::stdout().flush();
@@ -93,15 +96,59 @@ pub fn say(line: impl Display) {
     log(format!("  {line}"));
 }
 
+/// A line under a step that holds something of the user's, such as the
+/// iPhone's name, the team ID or a phone number: the log, which people
+/// share, gets `logged` in its place.
+pub fn say_personal(line: impl Display, logged: impl Display) {
+    println!("  {line}");
+    log(format!("  {logged}"));
+}
+
+/// Back to the start of the line, then the line, then nothing after it.
+/// rootshell turns a carriage return in a program's output into a new line,
+/// so the line goes back with the terminal's own code for it (CSI G).
+const OVER: &str = "\x1b[G";
+const CLEAR_REST: &str = "\x1b[K";
+
 /// A line that the next one replaces, for progress. It ends with `done`.
 pub fn progress(line: impl Display) {
-    print!("\r  {line}\x1b[K");
+    print!("{OVER}  {line}{CLEAR_REST}");
     let _ = io::stdout().flush();
+}
+
+/// Progress as a bar, `fraction` of the way along, with `label` after it,
+/// as in `███████████░░░░░░░  46 of 67 MB`. It ends with `done`.
+pub fn bar(fraction: f64, label: impl Display) {
+    let columns = std::env::var("COLUMNS")
+        .ok()
+        .and_then(|columns| columns.parse().ok());
+    progress(bar_line(fraction, &label.to_string(), columns));
+}
+
+/// The most cells the bar takes, and the fewest worth showing.
+const BAR_CELLS: usize = 18;
+const BAR_CELLS_MIN: usize = 6;
+
+/// The bar and its label, in `columns` when rootshell says how many the
+/// terminal has, as it does at the start: a line that wraps can't be gone
+/// back over. Too narrow for a bar, it's the label alone.
+fn bar_line(fraction: f64, label: &str, columns: Option<usize>) -> String {
+    // The indent, the gap after the bar, and a column spare, since a line
+    // that fills the last one wraps on some terminals.
+    let room = columns.map_or(BAR_CELLS, |columns| {
+        columns.saturating_sub(2 + 2 + 1 + label.chars().count())
+    });
+    let cells = room.min(BAR_CELLS);
+    if cells < BAR_CELLS_MIN {
+        return label.to_string();
+    }
+    let full = ((fraction.clamp(0.0, 1.0) * cells as f64) as usize).min(cells);
+    format!("{}{}  {label}", "█".repeat(full), "░".repeat(cells - full))
 }
 
 /// Ends a line of progress.
 pub fn done(line: impl Display) {
-    println!("\r  {line}\x1b[K");
+    println!("{OVER}  {line}{CLEAR_REST}");
     log(format!("  {line}"));
 }
 
@@ -212,6 +259,40 @@ mod tests {
         );
         assert_eq!(typed(b"wrong\x15right\r").unwrap(), "right");
         assert_eq!(typed(b"\x1b[Ahello\r").unwrap(), "[Ahello");
+    }
+
+    #[test]
+    fn a_bar_fills_with_its_fraction() {
+        assert_eq!(
+            bar_line(46.0 / 67.0, "46 of 67 MB", None),
+            "████████████░░░░░░  46 of 67 MB"
+        );
+        assert_eq!(bar_line(0.0, "0%", None), format!("{}  0%", "░".repeat(18)));
+        assert_eq!(
+            bar_line(1.0, "100%", None),
+            format!("{}  100%", "█".repeat(18))
+        );
+        // Past the end, as a total that grew can make it, it stays full.
+        assert_eq!(bar_line(1.5, "x", None), format!("{}  x", "█".repeat(18)));
+        assert_eq!(
+            bar_line(f64::NAN, "x", None),
+            format!("{}  x", "░".repeat(18))
+        );
+    }
+
+    #[test]
+    fn a_bar_fits_the_terminal() {
+        let width = |line: &str| 2 + line.chars().count();
+        // An iPhone held upright.
+        let line = bar_line(0.5, "460 of 670 MB", Some(36));
+        assert!(width(&line) < 36, "{line}");
+        assert!(line.starts_with("█████████░░░░░░░░░  "), "{line}");
+        // A longer label takes cells from the bar.
+        let line = bar_line(0.5, "1460 of 2670 MB", Some(36));
+        assert!(width(&line) < 36, "{line}");
+        assert!(line.starts_with("████████░░░░░░░░  "), "{line}");
+        // Too narrow for a bar.
+        assert_eq!(bar_line(0.5, "460 of 670 MB", Some(20)), "460 of 670 MB");
     }
 
     #[test]

@@ -48,6 +48,9 @@ mod phone;
 // renames and deletes with the errors std expects, for std and every
 // crate.
 mod chunks;
+// Folder listings that go to the end, which rootshell's don't.
+#[cfg(any(target_os = "wasi", test))]
+mod listing;
 mod paths;
 mod route;
 mod state;
@@ -281,7 +284,10 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
         .as_deref()
         .map(|ios| format!(", iOS {ios}"))
         .unwrap_or_default();
-    terminal::say(format!("Connected to {}{ios}.", phone.name));
+    terminal::say_personal(
+        format!("Connected to {}{ios}.", phone.name),
+        format!("Connected to the iPhone{ios}."),
+    );
     let (phone_name, udid) = (phone.name.clone(), phone.udid.clone());
     // Apple's steps take minutes of typing: a new tunnel installs.
     drop(phone);
@@ -467,7 +473,7 @@ fn install_app(
         let installed = phone.install(app, |percent| {
             awake::check_in();
             if shown.swap(percent, Ordering::Relaxed) != percent {
-                terminal::progress(format!("Installing: {percent}%"));
+                terminal::bar(percent as f64 / 100.0, format!("{percent}%"));
             }
         });
         terminal::log(format!(
