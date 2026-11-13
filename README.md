@@ -103,6 +103,8 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
 
 **A run that stops picks up where it left off.** What each step makes is kept until the install is done. That covers the download and, from the signing on, the signed app and what the app takes. A run for the same IPA, by its link or its SHA-256, goes straight to the install. If the install's connection breaks, which can happen while rootshell isn't on screen, the program asks to try again. Everything kept goes once the app is installed, a day after the signing, with `--redo`, or with `--forget`. If nothing more shows within a minute, a server isn't answering. Press Control-C and run it again, and it tries that server last.
 
+**If step 2 shows nothing for a minute** while LocalDevVPN is connected, the iPhone's pairing service has likely moved to another port, which can happen after a restart. Press Control-C. A Bonjour browser on the iPhone, such as Discovery – DNS-SD Browser, shows the port under `_remotepairing._tcp`. Run the program again with `--port` and that number. It keeps the port for later runs.
+
 ## Your Apple ID
 
 Everything stays on the iPhone. The password goes to Apple, and to the app being installed only when that app takes the sign-in (see [what your app takes](#for-app-developers-what-your-app-takes)). Atelier takes it, and the program says so before you type the password. Any other app gets it only once you've said yes.
