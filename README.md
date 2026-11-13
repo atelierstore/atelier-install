@@ -60,7 +60,7 @@ Every step runs in one App Store app, as one program. There's no computer at any
 - **Check-ins.** rootshell runs its programs in a web view that isn't in any window, and WebKit can suspend such a view's work (`WKPreferences.inactiveSchedulingPolicy`). On an iPhone, a computation that asked rootshell nothing, hashing a 38 MB binary, stopped until a key was pressed. So at most every 50 ms, the program makes a call to rootshell that changes nothing (`fd_prestat_get`). It does so from the signing's hashing, through a patched copy of apple-codesign-quick, from the download, from the install, and from every 64th allocation (`src/awake.rs`).
 - **Connections that never time out.** Network.framework keeps a connection waiting for a server that doesn't answer. So the program notes what it's waiting for, and the run after a Control-C tries that server last. It also goes straight to ports it knows instead of scanning for one.
 - **The same machine to Apple.** The anisette state is kept for each server, and handed to the app along with the sign-in, so Apple doesn't ask for a code again.
-- **Staying alive in Settings.** rootshell's Location Diary Mode keeps it running in the background while you type the code in Settings. It has to be Session Only: Auto During Active Sessions doesn't count a WebAssembly program as a session, so it stays off while the program runs. Notifications (OSC 777) bring you back to it. rootshell only shows them while Location Diary keeps it running in the background, or for a tab that isn't on screen.
+- **Staying alive in Settings.** rootshell's Location Diary Mode keeps it running in the background while you type the code in Settings. It has to be Session Only: Auto During Active Sessions doesn't count a WebAssembly program as a session, so it stays off while the program runs. rootshell doesn't show the program's notifications (OSC 777) from the background, for the same reason: it keeps them until it's in front again, where it skips them. So the pairing's code is read in rootshell itself.
 
 ## Using it
 
@@ -69,7 +69,7 @@ You need:
 - iOS 27 or later, with Developer Mode on (Settings › Privacy & Security › Developer Mode).
 - Wi-Fi. iOS refuses LocalDevVPN's connections to its services over mobile data.
 - LocalDevVPN, from the App Store.
-- rootshell, from the App Store, with Location Diary Mode on and set to Session Only, and Terminal Notifications on, both in its Settings › General. Session Only goes off when rootshell closes, so turn it on again before a later run.
+- rootshell, from the App Store, with Location Diary Mode on and set to Session Only, in its Settings › General. Session Only goes off when rootshell closes, so turn it on again before a later run.
 - An Apple ID. With a free one, apps open for 7 days.
 
 In rootshell, run this line:
@@ -82,7 +82,7 @@ It downloads the program's latest release, saves the iPhone's Wi-Fi address in `
 
 Later, `./atelier-install.wasm` and its options alone run the program again. You only need `ifconfig.txt` the first time, to pair. Without `--ipa`, the program installs the IPA in rootshell's folder.
 
-When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › Developer Mode, and type the code the program shows. The code also comes as a notification. Then connect LocalDevVPN and come back to rootshell. The program says what the install takes from your Apple ID, such as a certificate, and asks before it goes on. At Apple's limit of certificates, it asks which one to revoke. It never revokes one by itself. Stay in rootshell while it installs. Then trust your Apple ID in Settings › General › VPN & Device Management, and open the app. This build doesn't renew it: run it again before the 7 days are over.
+When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › Developer Mode, and enter your passcode. Settings then asks for a code: switch to rootshell to read it, then go back to Settings and type it. Then connect LocalDevVPN and come back to rootshell. The program says what the install takes from your Apple ID, such as a certificate, and asks before it goes on. At Apple's limit of certificates, it asks which one to revoke. It never revokes one by itself. Stay in rootshell while it installs. Then trust your Apple ID in Settings › General › VPN & Device Management, and open the app. This build doesn't renew it: run it again before the 7 days are over.
 
 ```
 ./atelier-install.wasm                  install the IPA in rootshell's folder
