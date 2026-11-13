@@ -48,6 +48,9 @@ mod phone;
 // renames and deletes with the errors std expects, for std and every
 // crate.
 mod chunks;
+// Folder listings that go to the end, which rootshell's don't.
+#[cfg(any(target_os = "wasi", test))]
+mod listing;
 mod paths;
 mod route;
 mod state;
