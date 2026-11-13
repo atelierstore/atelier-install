@@ -114,8 +114,11 @@ pub fn pair(state: &State, address: Option<&str>) -> Result<Pairing, Stop> {
         let _ = net::send_datagram(mdns::GROUP, mdns::PORT, &goodbye);
     }
     drop(listener);
-    let device = paired?;
-    terminal::say(format!("Paired with {device}."));
+    let (name, model) = paired?;
+    terminal::say_personal(
+        format!("Paired with {name} ({model})."),
+        format!("Paired with the iPhone ({model})."),
+    );
 
     let bytes = identity.to_bytes();
     state::write_new(&state.pairing(), &bytes)
@@ -201,12 +204,12 @@ fn announce(host: &mdns::Host) -> Result<(), Stop> {
 }
 
 /// Pairs with the iPhone on the first connection that gets through
-/// pair-setup, and returns it as "name (model)".
+/// pair-setup, and returns its name and model.
 fn accept(
     listener: &Listener,
     info: &PairableHostInfo,
     identity: &mut RpPairingFile,
-) -> Result<String, Stop> {
+) -> Result<(String, String), Stop> {
     for connection in 1..=MAX_CONNECTIONS {
         let stream = listener
             .accept()
@@ -220,7 +223,7 @@ fn accept(
             async {}
         }));
         match outcome {
-            Ok(Ok(device)) => return Ok(format!("{} ({})", device.name, device.model)),
+            Ok(Ok(device)) => return Ok((device.name, device.model)),
             Ok(Err(e)) if !code_shown.get() => {
                 terminal::say(format!("A connection ended before pairing started ({e})."));
             }

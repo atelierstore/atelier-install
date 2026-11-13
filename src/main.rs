@@ -284,7 +284,10 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
         .as_deref()
         .map(|ios| format!(", iOS {ios}"))
         .unwrap_or_default();
-    terminal::say(format!("Connected to {}{ios}.", phone.name));
+    terminal::say_personal(
+        format!("Connected to {}{ios}.", phone.name),
+        format!("Connected to the iPhone{ios}."),
+    );
     let (phone_name, udid) = (phone.name.clone(), phone.udid.clone());
     // Apple's steps take minutes of typing: a new tunnel installs.
     drop(phone);

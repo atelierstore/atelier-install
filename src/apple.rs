@@ -388,10 +388,13 @@ fn ask_code(params: &TwoFactorCallbackParams, cancelled: &AtomicBool) -> TwoFact
         .or(params.numbers.first());
     match (params.unknown, params.sms, selected) {
         (true, _, _) => terminal::say("Apple wants a verification code."),
-        (false, true, Some(number)) => terminal::say(format!(
-            "Apple sent a code by text message to {}.",
-            number.number_with_dial_code
-        )),
+        (false, true, Some(number)) => terminal::say_personal(
+            format!(
+                "Apple sent a code by text message to {}.",
+                number.number_with_dial_code
+            ),
+            "Apple sent a code by text message to a trusted number.",
+        ),
         (false, true, None) => terminal::say("Apple sent a code by text message."),
         (false, false, _) => terminal::say("Apple sent a code to your other Apple devices."),
     }
@@ -418,7 +421,10 @@ fn ask_code(params: &TwoFactorCallbackParams, cancelled: &AtomicBool) -> TwoFact
                 [number] => return TwoFactorCallbackResponse::SendSms(number.id),
                 numbers => {
                     for (index, number) in numbers.iter().enumerate() {
-                        terminal::say(format!("{}. {}", index + 1, number.number_with_dial_code));
+                        terminal::say_personal(
+                            format!("{}. {}", index + 1, number.number_with_dial_code),
+                            format!("{}. a trusted number", index + 1),
+                        );
                     }
                     let picked = terminal::ask("Which number? ")
                         .ok()
@@ -616,7 +622,6 @@ pub async fn sign(
         .get_team()
         .await
         .map_err(|report| failed("Couldn't get the Apple ID's team", report))?;
-    terminal::log(format!("team {}", team.team_id));
 
     let bundle_id = format!("{}.{}", ipa.bundle_id, team.team_id);
     let app_ids = sideloader
@@ -624,10 +629,13 @@ pub async fn sign(
         .list_app_ids(&team, None::<DeveloperDeviceType>)
         .await
         .map_err(|report| failed("Couldn't list the team's App IDs", report))?;
-    terminal::say(format!(
-        "{} {} installs as {bundle_id}.",
-        ipa.name, ipa.version
-    ));
+    terminal::say_personal(
+        format!("{} {} installs as {bundle_id}.", ipa.name, ipa.version),
+        format!(
+            "{} {} installs as {}.<team ID>.",
+            ipa.name, ipa.version, ipa.bundle_id
+        ),
+    );
     if app_ids
         .app_ids
         .iter()
@@ -723,16 +731,29 @@ pub async fn sign(
 fn pick_team(teams: &Vec<DeveloperTeam>) -> Option<String> {
     terminal::say("This Apple ID is in more than one team:");
     for (index, team) in teams.iter().enumerate() {
-        terminal::say(format!(
-            "{}. {} ({})",
-            index + 1,
-            team.name.as_deref().unwrap_or("No name"),
-            team.team_id
-        ));
+        terminal::say_personal(
+            format!(
+                "{}. {} ({})",
+                index + 1,
+                team.name.as_deref().unwrap_or("No name"),
+                team.team_id
+            ),
+            format!("{}. a team", index + 1),
+        );
     }
     let typed = terminal::ask("Which one signs Atelier? ").ok()?;
     let index = typed.parse::<usize>().ok()?.checked_sub(1)?;
     teams.get(index).map(|team| team.team_id.clone())
+}
+
+/// A certificate's machine as the log has it: a Mac's name can have its
+/// owner's in it, as Xcode names them, so only Atelier's and this
+/// program's are kept.
+fn logged_machine(made_on: &str) -> &str {
+    match made_on {
+        MACHINE_NAME | "Atelier" => made_on,
+        _ => "another machine",
+    }
 }
 
 /// At Apple's limit: which certificate to revoke, by its serial number,
@@ -779,7 +800,11 @@ fn pick_certificates(certificates: &[DevelopmentCertificate], again: bool) -> Op
             index + 1,
             certificate.name.as_deref().unwrap_or("Certificate")
         );
-        terminal::log(format!("  {}. made on {made_on}{expires}", index + 1));
+        terminal::log(format!(
+            "  {}. made on {}{expires}",
+            index + 1,
+            logged_machine(made_on)
+        ));
     }
     let typed = terminal::ask("Number to revoke, or nothing to stop: ").ok()?;
     let certificate = listed.get(typed.parse::<usize>().ok()?.checked_sub(1)?)?;
@@ -790,7 +815,10 @@ fn pick_certificates(certificates: &[DevelopmentCertificate], again: bool) -> Op
     if !terminal::confirm(&format!("Revoke the certificate made on {made_on}?")).ok()? {
         return None;
     }
-    terminal::log(format!("revoking the certificate made on {made_on}"));
+    terminal::log(format!(
+        "revoking the certificate made on {}",
+        logged_machine(made_on)
+    ));
     certificate.serial_number.clone().map(|serial| vec![serial])
 }
 
@@ -815,6 +843,13 @@ mod tests {
 
     fn urls(list: List) -> Vec<String> {
         list.servers.into_iter().map(|server| server.url).collect()
+    }
+
+    #[test]
+    fn the_log_names_only_our_own_machines() {
+        assert_eq!(logged_machine(MACHINE_NAME), MACHINE_NAME);
+        assert_eq!(logged_machine("Atelier"), "Atelier");
+        assert_eq!(logged_machine("Someone's MacBook Pro"), "another machine");
     }
 
     #[test]

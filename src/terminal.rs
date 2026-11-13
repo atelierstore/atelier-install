@@ -42,8 +42,9 @@ static LOG: Mutex<Option<File>> = Mutex::new(None);
 static STARTED: OnceLock<Instant> = OnceLock::new();
 
 /// Starts the log at `path`, replacing the last run's. It holds the steps
-/// and the errors, never the Apple ID, its password, a code or the name of
-/// the Apple ID's owner.
+/// and the errors, never the Apple ID, its password, a code, the name of
+/// the Apple ID's owner, the iPhone's name, the team ID or a phone number
+/// (`say_personal`).
 pub fn start_log(path: &Path) {
     STARTED.get_or_init(Instant::now);
     let file = OpenOptions::new()
@@ -93,6 +94,14 @@ pub fn step(number: u32, of: u32, title: &str) {
 pub fn say(line: impl Display) {
     println!("  {line}");
     log(format!("  {line}"));
+}
+
+/// A line under a step that holds something of the user's, such as the
+/// iPhone's name, the team ID or a phone number: the log, which people
+/// share, gets `logged` in its place.
+pub fn say_personal(line: impl Display, logged: impl Display) {
+    println!("  {line}");
+    log(format!("  {logged}"));
 }
 
 /// Back to the start of the line, then the line, then nothing after it.
