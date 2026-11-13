@@ -6,15 +6,18 @@
 //! code: the program that pairs is the one that installs.
 
 use std::cell::Cell;
+use std::fmt::Debug;
 use std::fs;
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::net::Ipv4Addr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use idevice::remote_pairing::{PairableHost, PairableHostInfo, RpPairingFile, RpPairingSocket};
 
 use crate::blocking::{self, Blocking};
+use crate::door::Door;
 use crate::net::{self, Listener};
+use crate::page::{self, View};
 use crate::state::{self, State};
 use crate::terminal::{self, Stop};
 use crate::{address, mdns};
@@ -26,13 +29,17 @@ const DISPLAY_NAME: &str = "Atelier";
 /// iOS treats a pairable host as a computer; this Mac is idevice's default,
 /// and what Atelier's own host says.
 const HOST_MODEL: &str = "Mac17,7";
-/// `ifconfig en0 > ifconfig.txt`, the address's usual source.
-const IFCONFIG_FILE: &str = "ifconfig.txt";
+/// `ifconfig en0 > ifconfig.txt`, the address's usual source, or all of
+/// `ifconfig`, as the page's Shortcut saves it.
+pub const IFCONFIG_FILE: &str = "ifconfig.txt";
 /// How many connections one run pairs on: a stray one, or a mistyped code,
 /// leaves the entry in Settings good for another tap.
 const MAX_CONNECTIONS: u32 = 5;
 /// Announcements, a second apart, as Bonjour sends its own.
 const ANNOUNCEMENTS: u32 = 3;
+/// How often the pairing looks for the iPhone's connection while it
+/// answers the page.
+const LOOK_EVERY: Duration = Duration::from_millis(300);
 
 pub struct Pairing {
     pub file: RpPairingFile,
@@ -75,15 +82,30 @@ pub fn find(state: &State) -> Result<Option<Pairing>, Stop> {
     Ok(Some(Pairing { file, bytes }))
 }
 
+/// Where the program waits for the iPhone's connection: in the terminal,
+/// for as long as it takes, or, with the page up, looking now and then, as
+/// it answers the page, which shows the code the pairing goes by.
+enum Waiting {
+    Terminal(Listener),
+    Page(Door, String),
+}
+
 /// Pairs this iPhone with the program, and keeps the pairing.
 pub fn pair(state: &State, address: Option<&str>) -> Result<Pairing, Stop> {
     let address = wifi_address(address)?;
     let port = random_port();
-    let listener = Listener::bind(port)
-        .map_err(|e| Stop::new(format!("Couldn't listen for the iPhone: {e}")))?;
+    let listening = |e: io::Error| Stop::new(format!("Couldn't listen for the iPhone: {e}"));
+    let mut waiting = if page::on() {
+        Waiting::Page(Door::open(port).map_err(listening)?, random_code())
+    } else {
+        Waiting::Terminal(Listener::bind(port).map_err(listening)?)
+    };
 
     let mut identity = RpPairingFile::generate(&unique_seed());
-    let info = PairableHostInfo::generate(DISPLAY_NAME, HOST_MODEL);
+    let mut info = PairableHostInfo::generate(DISPLAY_NAME, HOST_MODEL);
+    if let Waiting::Page(_, code) = &waiting {
+        info.setup_code = Some(code.clone());
+    }
     let host = mdns::Host {
         instance: identity.identifier.clone(),
         host_label: format!("atelier-{:08x}", random_u32()),
@@ -108,12 +130,22 @@ pub fn pair(state: &State, address: Option<&str>) -> Result<Pairing, Stop> {
         mdns::TTL / 60
     ));
 
-    let paired = accept(&listener, &info, &mut identity);
+    let paired = match &mut waiting {
+        Waiting::Terminal(listener) => accept(|| listener.accept(), &info, &mut identity),
+        Waiting::Page(door, code) => {
+            show_code("Code for Settings", code);
+            page::show(View::Pair {
+                code: code.clone(),
+                problem: None,
+            });
+            accept(|| next_on_page(door), &info, &mut identity)
+        }
+    };
     // Whatever came of it, the entry in Settings has done its job.
     if let Ok(goodbye) = host.goodbye() {
         let _ = net::send_datagram(mdns::GROUP, mdns::PORT, &goodbye);
     }
-    drop(listener);
+    drop(waiting);
     let (name, model) = paired?;
     terminal::say_personal(
         format!("Paired with {name} ({model})."),
@@ -153,6 +185,13 @@ fn wifi_address(given: Option<&str>) -> Result<Ipv4Addr, Stop> {
         Err(_) => terminal::say(format!(
             "There's no {IFCONFIG_FILE} here (ifconfig en0 > {IFCONFIG_FILE} makes it)."
         )),
+    }
+    // Nobody looks at the terminal.
+    if page::on() {
+        return Err(
+            Stop::new("No Wi-Fi address, so there's nothing to announce")
+                .next("Connect to Wi-Fi, then run the Shortcut again."),
+        );
     }
     terminal::say("Type this iPhone's Wi-Fi address, from Settings › Wi-Fi › ⓘ › IP Address:");
     let _ = std::io::stdout().flush();
@@ -203,17 +242,30 @@ fn announce(host: &mdns::Host) -> Result<(), Stop> {
     }
 }
 
-/// Pairs with the iPhone on the first connection that gets through
-/// pair-setup, and returns its name and model.
-fn accept(
-    listener: &Listener,
+/// The iPhone's connection, answering the page until it comes.
+fn next_on_page(door: &mut Door) -> io::Result<crate::door::Visitor> {
+    loop {
+        page::tick();
+        if let Some(visitor) = door.next()? {
+            return Ok(visitor);
+        }
+        std::thread::sleep(LOOK_EVERY);
+    }
+}
+
+/// Pairs with the iPhone on the first connection, of those `next` waits
+/// for, that gets through pair-setup, and returns its name and model.
+fn accept<S>(
+    mut next: impl FnMut() -> io::Result<S>,
     info: &PairableHostInfo,
     identity: &mut RpPairingFile,
-) -> Result<(String, String), Stop> {
+) -> Result<(String, String), Stop>
+where
+    S: Read + Write + Unpin + Send + Sync + Debug + 'static,
+{
     for connection in 1..=MAX_CONNECTIONS {
-        let stream = listener
-            .accept()
-            .map_err(|e| Stop::new(format!("Stopped waiting for the iPhone: {e}")))?;
+        let stream =
+            next().map_err(|e| Stop::new(format!("Stopped waiting for the iPhone: {e}")))?;
         let code_shown = Cell::new(false);
         let mut host =
             PairableHost::new(RpPairingSocket::new_device(Blocking(stream)), info.clone());
@@ -231,6 +283,15 @@ fn accept(
                 terminal::say(format!(
                     "That didn't pair ({e}). Was the code typed as shown?"
                 ));
+                if let Some(code) = &info.setup_code {
+                    page::show(View::Pair {
+                        code: code.clone(),
+                        problem: Some(
+                            "That didn't pair. Tap Pair with Atelier again, and enter this code."
+                                .into(),
+                        ),
+                    });
+                }
             }
             Err(blocking::NotReady) => {
                 return Err(Stop::new(
@@ -269,6 +330,12 @@ fn spaced(code: &str) -> String {
     }
 }
 
+/// The code the pairing goes by on the page: 6 digits, as idevice makes
+/// its own.
+fn random_code() -> String {
+    format!("{:06}", random_u32() % 1_000_000)
+}
+
 fn random_u32() -> u32 {
     let mut bytes = [0u8; 4];
     getrandom::getrandom(&mut bytes).expect("the system's random source");
@@ -303,6 +370,15 @@ mod tests {
     fn codes_read_in_threes() {
         assert_eq!(spaced("123456"), "123 456");
         assert_eq!(spaced("12345"), "12345");
+    }
+
+    #[test]
+    fn the_pages_codes_are_six_digits() {
+        for _ in 0..200 {
+            let code = random_code();
+            assert_eq!(code.len(), 6);
+            assert!(code.bytes().all(|byte| byte.is_ascii_digit()));
+        }
     }
 
     #[test]

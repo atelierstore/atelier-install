@@ -11,7 +11,7 @@ resolver = "2"
 members = ["testphone", "vendor/isideload"]
 # Crates patched for this program, not members; its copy of isideload is
 # one, for its tests.
-exclude = ["vendor/jktcp", "vendor/apple-codesign-quick"]
+exclude = ["vendor/jktcp", "vendor/idevice", "vendor/apple-codesign-quick"]
 
 [workspace.package]
 version = "0.2.1"
@@ -27,6 +27,9 @@ plist = "1.8"
 # idevice's TCP stack, patched for rootshell's single thread (see its lib.rs).
 [patch.crates-io]
 jktcp = { path = "vendor/jktcp" }
+# idevice, patched so the pairing's code can be chosen before Settings asks
+# for it (see src/remote_pairing/responder.rs).
+idevice = { path = "vendor/idevice" }
 
 [dependencies]
 # What the program reaches the iPhone with, on its own tunnel (src/tunnel.rs)
@@ -56,6 +59,8 @@ plist.workspace = true
 # anisette list.
 zip = { version = "8", default-features = false, features = ["deflate"] }
 serde_json = "1"
+# What the page shows, as JSON (src/page.rs).
+serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 hex = "0.4"
 # The ones isideload keeps the key and reads certificates with, to find the

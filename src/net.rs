@@ -113,13 +113,19 @@ mod imp {
     impl Listener {
         /// Listens on `port`, on every address the iPhone has.
         pub fn bind(port: u16) -> io::Result<Self> {
+            Self::bind_queue(port, 4)
+        }
+
+        /// The same, with room for `queue` connections waiting to be
+        /// accepted, as the page's knocks and a browser's can be.
+        pub fn bind_queue(port: u16, queue: i32) -> io::Result<Self> {
             let fd = socket(SOCK_STREAM)?;
             let listener = Listener { fd };
             let addr = sockaddr(Ipv4Addr::UNSPECIFIED, port);
             check("bind", unsafe {
                 rootshell_socket_bind(fd, addr.as_ptr(), addr.len() as i32)
             })?;
-            check("listen", unsafe { rootshell_socket_listen(fd, 4) })?;
+            check("listen", unsafe { rootshell_socket_listen(fd, queue) })?;
             Ok(listener)
         }
 
@@ -265,6 +271,11 @@ mod imp {
     impl Listener {
         pub fn bind(port: u16) -> io::Result<Self> {
             TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).map(Listener)
+        }
+
+        /// std's listeners queue 128.
+        pub fn bind_queue(port: u16, _queue: i32) -> io::Result<Self> {
+            Self::bind(port)
         }
 
         pub fn accept(&self) -> io::Result<Stream> {

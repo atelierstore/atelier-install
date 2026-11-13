@@ -1,0 +1,145 @@
+<!doctype html>
+<!--
+  The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs).
+  The screens' wording is the mockup Alex approved on 13 Nov 2026
+  (pair, sign-in, code, review, installing, done). The others (busy,
+  question, stopped, and the lines marked "not drawn yet") wait for a
+  mockup of their own.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Install Atelier</title>
+<link rel="stylesheet" href="/page.css">
+<script src="/page.js" defer></script>
+</head>
+<body>
+<main class="inst">
+  <header class="inst-head"><img src="/icon.png" alt="" width="40" height="40"><div><strong>Install Atelier</strong><span>From rootshell, on this iPhone</span></div></header>
+  <ol class="stepper" id="stepper"><li>Pair</li><li>Sign in</li><li>Install</li></ol>
+  <!-- Not drawn yet. -->
+  <p class="lost" id="lost" hidden>The installer isn't answering. rootshell's terminal says why.</p>
+  <div class="card" id="card"><p class="wait">Waiting for the installer</p></div>
+</main>
+
+<template id="no-key">
+  <!-- Not drawn yet. -->
+  <h2>Open this page from the Shortcut</h2>
+  <p>Its address has a key that the Install Atelier Shortcut makes.</p>
+</template>
+
+<template id="busy">
+  <!-- Not drawn yet: the title is the installer's. -->
+  <h2 data-field="title"></h2>
+  <div data-part="bar">
+    <div class="bar"><i data-field="bar"></i></div>
+    <div class="bar-text"><span data-field="bar-text"></span><span data-field="percent"></span></div>
+  </div>
+  <p class="wait" data-part="wait">Working on it</p>
+</template>
+
+<template id="pair">
+  <h2>Pair your iPhone with Atelier</h2>
+  <p>This lets Atelier install apps on this iPhone. You do it once.</p>
+  <div class="code"><span>Your code</span><b data-field="code"></b></div>
+  <ol>
+    <li>Open <strong>Settings › Privacy &amp; Security › Developer Mode</strong>.</li>
+    <li>Scroll down and tap <strong>Pair with Atelier</strong>.</li>
+    <li>Enter your passcode, then this code.</li>
+  </ol>
+  <p class="note">Then come back here. The page goes on by itself.</p>
+  <p class="problem" data-field="problem" hidden></p>
+  <p class="wait">Waiting for Settings</p>
+</template>
+
+<template id="sign-in">
+  <h2>Sign in with your Apple ID</h2>
+  <p>Atelier is signed with your Apple ID, free or paid. Your password goes only to Apple.</p>
+  <form data-form>
+    <label class="field">Apple ID<input class="input" name="apple_id" type="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="name@example.com" required data-keep></label>
+    <label class="field" data-part="password">Password<input class="input" name="password" type="password" autocomplete="current-password" required></label>
+    <p class="problem" data-field="problem" hidden></p>
+    <button class="btn btn-primary" type="submit">Sign in</button>
+  </form>
+  <p class="note">Atelier keeps the token Apple gives it, never your password.</p>
+</template>
+
+<template id="code">
+  <h2>Enter Apple's code</h2>
+  <p data-field="sent">Apple sent a six-digit code to your devices. When this iPhone shows it, note it, then come back here.</p>
+  <form data-form>
+    <div class="digits-box">
+      <input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" aria-label="Apple's code" required>
+      <div class="digits" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    </div>
+    <p class="problem" data-field="problem" hidden></p>
+    <button class="btn btn-primary" type="submit">Continue</button>
+  </form>
+  <!-- Not drawn yet. -->
+  <div class="ways">
+    <button type="button" data-action="again">Send a new code</button>
+    <button type="button" data-action="text" hidden>Text it to me</button>
+    <button type="button" data-action="devices" hidden>Send it to my devices</button>
+  </div>
+</template>
+
+<template id="question">
+  <!-- Not drawn yet: the wording is the installer's. -->
+  <h2 data-field="title"></h2>
+  <div class="text" data-field="text"></div>
+  <div class="options" data-field="options" role="radiogroup"></div>
+  <button class="btn btn-primary" type="button" data-answer="yes" data-field="yes"></button>
+  <button class="btn btn-secondary" type="button" data-answer="no" data-field="no" hidden></button>
+</template>
+
+<template id="review">
+  <h2>Sign and install Atelier?</h2>
+  <div class="release">
+    <img src="/icon.png" alt="" width="52" height="52">
+    <span class="release-name"><strong data-field="release"></strong><span data-field="size"></span></span>
+  </div>
+  <dl class="facts2">
+    <div><dt>App ID</dt><dd data-field="app-id"></dd></div>
+    <div><dt>With a free Apple ID</dt><dd>It opens for 7 days, then renews itself on Wi&#8209;Fi. An iPhone holds 3 such apps at a time.</dd></div>
+  </dl>
+  <button class="btn btn-primary" type="button" data-answer="yes">Sign and install</button>
+  <button class="btn btn-secondary" type="button" data-answer="no">Not now</button>
+</template>
+
+<template id="installing">
+  <h2>Installing Atelier</h2>
+  <div class="bar"><i data-field="bar"></i></div>
+  <div class="bar-text"><span data-field="bar-text"></span><span data-field="percent"></span></div>
+  <ul class="ticks">
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Paired with this iPhone</li>
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Signed in to Apple</li>
+    <li data-tick="signing" class="now">Signing Atelier</li>
+    <li data-tick="signed" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Signed Atelier</li>
+    <li data-tick="installing" class="now" hidden>Installing it</li>
+  </ul>
+  <p class="note">You can switch to another app meanwhile. rootshell goes on while Session Only is on.</p>
+</template>
+
+<template id="done">
+  <div class="big-check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg></div>
+  <h2>Atelier is installed</h2>
+  <p>One step before it opens the first time:</p>
+  <ol>
+    <li>Open <strong>Settings › General › VPN &amp; Device Management</strong>.</li>
+    <li>Tap your Apple ID, then <strong>Trust</strong>.</li>
+  </ol>
+  <p class="note">Then tap Done at the top, and open Atelier from your Home Screen. <span data-part="handed">It opens signed in and already paired. </span>The installer has stopped, so you can close rootshell.</p>
+</template>
+
+<template id="stopped">
+  <!-- Not drawn yet: what stopped it is the installer's. -->
+  <h2>The install stopped</h2>
+  <p data-field="what"></p>
+  <ul class="next" data-field="next"></ul>
+  <p class="note">rootshell's terminal says the same, and atelier-install.log, in rootshell's folder, has the details.</p>
+</template>
+</body>
+</html>

@@ -14,6 +14,13 @@ else in its work folder, that it takes and hides the file Atelier's pairing
 program leaves, that it refuses one that isn't a pairing, and that --forget
 deletes what it kept.
 
+Then the same with the page (--page), as the Install Atelier Shortcut runs
+it: asks the page over HTTP, as the page's script does, reads the code it
+shows before the phone connects, pairs the phone on it, answers its
+question about LocalDevVPN, and reads why it stopped at the tunnel. And
+checks that the page answers nobody without its key or under another name,
+and that the key isn't in the log.
+
     cargo build --release --target wasm32-wasip1
     cargo build -p atelier-testphone
     python3 harness/test_install.py
@@ -32,6 +39,10 @@ import sys
 import tempfile
 import threading
 import time
+
+import http.client
+import json
+import random
 
 import dnslib
 
@@ -260,7 +271,150 @@ def main():
     check(status == 0 and not os.path.exists(os.path.join(folder, ".atelier")), f"--forget left .atelier:\n{said}")
     print("ok  --forget deletes what it kept, once told yes")
     shutil.rmtree(folder)
+    page(address, port)
     print("PASSED")
+
+
+IFCONFIG = """lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384
+\tinet 127.0.0.1 netmask 0xff000000
+pdp_ip0: flags=8011<UP,POINTOPOINT,MULTICAST> mtu 1450
+\tinet 10.142.7.9 netmask 0xff000000
+en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500
+\tinet {address} netmask 0xffffff00 broadcast 192.168.1.255
+"""
+LOCAL_DEV_VPN = """utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500
+\tinet 10.7.1.1 --> 10.7.0.1 netmask 0xffffffff
+"""
+
+
+class Page:
+    """The program's page, asked as its script asks it."""
+
+    def __init__(self, port, key):
+        self.port, self.key = port, key
+
+    def ask(self, method, path, body=None, headers=None, host=None):
+        """The status and the body of one request, once the page is up."""
+        until = time.time() + 30
+        while True:
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+                connection.putrequest(method, path, skip_host=True)
+                connection.putheader("Host", host or f"127.0.0.1:{self.port}")
+                for name, value in (headers or {}).items():
+                    connection.putheader(name, value)
+                if body is not None:
+                    connection.putheader("Content-Length", str(len(body)))
+                connection.endheaders(body)
+                response = connection.getresponse()
+                return response.status, response.read()
+            except ConnectionRefusedError:
+                if time.time() > until:
+                    raise
+                time.sleep(0.2)
+            finally:
+                connection.close()
+
+    def state(self):
+        status, body = self.ask("GET", "/state", headers={"X-Atelier-Key": self.key})
+        check(status == 200, f"the state: {status} {body!r}")
+        return json.loads(body)
+
+    def wait_for(self, screen, program, seen=None):
+        """The state once the page shows `screen`, noting the screens it
+        showed on the way in `seen`."""
+        until = time.time() + 60
+        while time.time() < until:
+            state = self.state()
+            if seen is not None and (not seen or seen[-1] != state["view"]["screen"]):
+                seen.append(state["view"]["screen"])
+            if state["view"]["screen"] == screen:
+                return state
+            time.sleep(0.3)
+        fail(f"the page never showed {screen}", program)
+
+    def answer(self, state, answer):
+        body = json.dumps({"seq": state["seq"], "answer": answer}).encode()
+        status, reply = self.ask("POST", "/answer", body, {
+            "X-Atelier-Key": self.key, "Content-Type": "application/json"})
+        check(status == 200 and json.loads(reply) == {"taken": True}, f"the answer: {status} {reply!r}")
+
+
+def page(address, closed):
+    """The page, as the Install Atelier Shortcut opens it."""
+    folder = tempfile.mkdtemp(prefix="atelier-install-page-")
+    with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
+        ifconfig.write(IFCONFIG.format(address=address))
+    port = random.randint(20000, 29999)
+    key = "".join(str(random.randint(100000000, 999999999)) for _ in range(3))
+    observer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    observer.bind(("127.0.0.1", 0))
+    observer.settimeout(30)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed,
+                      mdns_port=observer.getsockname()[1])
+    page = Page(port, key)
+
+    # Its files to anyone, its state only with the key, and nothing under
+    # another name.
+    status, html = page.ask("GET", "/")
+    check(status == 200 and b"Pair your iPhone with Atelier" in html, f"the page: {status}", program)
+    check(page.ask("GET", "/state")[0] == 403, "the state without the key", program)
+    check(page.ask("GET", "/state", headers={"X-Atelier-Key": key[:-1] + "x"})[0] == 403,
+          "the state with another key", program)
+    check(page.ask("GET", "/", host=f"atelier.example:{port}")[0] == 403,
+          "the page under another name", program)
+    print("ok  the page answers only with its key, and only under its own name")
+
+    # The code shows before the phone connects; the phone pairs on it.
+    state = page.wait_for("pair", program)
+    code = state["view"]["code"]
+    check(re.fullmatch(r"\d{6}", code) and state["stage"] == 0, f"the pairing's view: {state}", program)
+    packet, _ = observer.recvfrom(4096)
+    record = dnslib.DNSRecord.parse(packet)
+    srv = next(a for a in record.rr if dnslib.QTYPE[a.rtype] == "SRV")
+    phone = subprocess.Popen([PHONE, "pair", address, str(srv.rdata.port)], stdin=subprocess.PIPE,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    check(phone.stdout.readline().strip() == "code?", "the phone didn't get to the code", program)
+    # From here until the code is typed, the program waits on the phone, as
+    # the person is in Settings: the page shows the code already.
+    phone.stdin.write(code + "\n")
+    phone.stdin.flush()
+    phone.stdout.read()
+    check(phone.wait(timeout=30) == 0, f"the phone didn't pair on the page's code: {phone.stderr.read()}", program)
+    print("ok  the page shows the code before the phone asks, and the phone pairs on it")
+
+    # Without LocalDevVPN in ifconfig.txt, the page asks for it.
+    state = page.wait_for("question", program)
+    check(state["asking"] and state["view"]["title"] == "Connect LocalDevVPN",
+          f"the question after pairing: {state}", program)
+    page.answer(state, {"yes": True})
+    seen = []
+    state = page.wait_for("stopped", program, seen)
+    check(f"pairing service didn't answer at port {closed}" in state["view"]["what"],
+          f"why it stopped: {state}", program)
+    status, said = program.end()
+    check(status == 1, f"the run with the page ended with {status}:\n{said}")
+    with open(os.path.join(folder, "atelier-install.log")) as log:
+        logged = log.read()
+    check(key not in logged and f"the page: port {port}" in logged, "the log and the page's key")
+    check(key in said, "the terminal didn't say where the page is")
+    print("ok  it asks for LocalDevVPN when ifconfig.txt doesn't list it, then stops at the tunnel and says why")
+    print("ok  the page's key is in the terminal, never in the log")
+
+    # With the pairing kept and LocalDevVPN listed, it goes straight on.
+    with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
+        ifconfig.write(IFCONFIG.format(address=address) + LOCAL_DEV_VPN)
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed)
+    page = Page(port, key)
+    seen = []
+    state = page.wait_for("stopped", program, seen)
+    check("pair" not in seen and "question" not in seen, f"the page showed {seen}", program)
+    status, said = program.end()
+    check(status == 1 and "LocalDevVPN was connected when the Shortcut started" in said,
+          f"the second run with the page said ({status}):\n{said}")
+    print("ok  with the pairing kept and LocalDevVPN listed, the page goes straight on")
+    shutil.rmtree(folder)
 
 
 if __name__ == "__main__":
