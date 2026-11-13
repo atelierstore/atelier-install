@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "atelier-install"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "apple-codesign-quick",
  "getrandom 0.2.17",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "atelier-testphone"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",

@@ -253,10 +253,12 @@ def main():
     check(status == 1 and "no Apple ID was given" in said, f"--sign-in with nothing typed said ({status}):\n{said}")
     print("ok  --sign-in stops when no Apple ID is typed")
 
-    # --forget deletes what it kept.
-    status, said = run(folder, "--forget")
+    # --forget deletes nothing without a yes, then what it kept.
+    status, said = run(folder, "--forget", typed="no\n")
+    check(status == 0 and os.path.exists(os.path.join(folder, ".atelier")), f"--forget deleted without a yes:\n{said}")
+    status, said = run(folder, "--forget", typed="yes\n")
     check(status == 0 and not os.path.exists(os.path.join(folder, ".atelier")), f"--forget left .atelier:\n{said}")
-    print("ok  --forget deletes what it kept")
+    print("ok  --forget deletes what it kept, once told yes")
     shutil.rmtree(folder)
     print("PASSED")
 

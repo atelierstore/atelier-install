@@ -189,6 +189,10 @@ fn main() -> ExitCode {
 
     let result = State::open().map_err(Stop::from).and_then(|state| {
         if options.forget {
+            if !forget_confirmed()? {
+                println!("Nothing was deleted.");
+                return Ok(());
+            }
             state.forget()?;
             println!(
                 "Deleted what this program kept: the pairing, the signing key and the sign-in servers' states."
@@ -725,6 +729,30 @@ fn sign_in(
     ))
 }
 
+/// What --forget says before it deletes anything, as approved on 13 Nov
+/// 2026: without the signing key, the next run needs a new certificate,
+/// which at Apple's limit means revoking one, maybe Atelier's.
+const FORGET_WARNING: &[&str] = &[
+    "This deletes what this program kept: the pairing, Apple's token,",
+    "the signing key and the sign-in servers' states.",
+    "Without the signing key, the next run needs a new certificate.",
+    "At Apple's limit that means revoking one, and apps signed with it,",
+    "such as Atelier, stop opening until they're signed again.",
+];
+
+/// Says what --forget deletes, and whether the user typed yes.
+fn forget_confirmed() -> Result<bool, Stop> {
+    for line in FORGET_WARNING {
+        println!("{line}");
+    }
+    Ok(is_yes(&terminal::answer("Type yes to delete it all: ")?))
+}
+
+/// Only a yes, in any case: --forget can't be undone.
+fn is_yes(answer: &str) -> bool {
+    answer.trim().eq_ignore_ascii_case("yes")
+}
+
 /// What to do when Atelier doesn't get the sign-in.
 const YOURSELF: &str = "Sign in to Atelier yourself: it then makes a certificate of its own.";
 
@@ -890,6 +918,15 @@ mod tests {
         let check = options(&["--sign-in"]).unwrap();
         assert_eq!(token_use(&check, None), (false, false));
         assert_eq!(token_use(&check, Some(Format::Token)), (false, false));
+    }
+
+    #[test]
+    fn forget_deletes_only_after_a_yes() {
+        assert!(is_yes("yes"));
+        assert!(is_yes(" YES\n"));
+        assert!(!is_yes("y"));
+        assert!(!is_yes(""));
+        assert!(!is_yes("no"));
     }
 
     #[test]
