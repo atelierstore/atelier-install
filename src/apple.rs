@@ -13,7 +13,7 @@ use isideload::SideloadError;
 use isideload::anisette::AnisetteClientInfo;
 use isideload::anisette::remote_v3::RemoteV3AnisetteProvider;
 use isideload::auth::apple_account::{
-    AppleAccount, TwoFactorCallbackParams, TwoFactorCallbackResponse,
+    AppleAccount, TrustedNumber, TwoFactorCallbackParams, TwoFactorCallbackResponse,
 };
 use isideload::dev::app_ids::AppIdsApi;
 use isideload::dev::certificates::DevelopmentCertificate;
@@ -33,6 +33,7 @@ use crate::awake;
 use crate::certificate::{self, Certificate};
 use crate::ipa::Ipa;
 use crate::kept;
+use crate::page::{self, Bar, View};
 use crate::route::{self, Failure, List, Route, Server};
 use crate::state::{AppleIdHash, State};
 use crate::terminal::{self, Stop};
@@ -47,6 +48,8 @@ const LIST_URL: &str = "https://api.atelierstore.app/anisette";
 const MACHINE_NAME: &str = "Atelier Installer";
 /// Apple's "too many certificates".
 const TOO_MANY_CERTIFICATES: i64 = 7460;
+/// What a wrong password stops with, which the page asks again after.
+pub const WRONG_PASSWORD: &str = "Apple says the Apple ID or password is wrong";
 /// The most times to ask which certificate to revoke. isideload asks Apple
 /// for the certificate 4 times in all, coming here after each "too many
 /// certificates", and not again after the fourth, when a revoke would be
@@ -404,6 +407,9 @@ fn ask_code(params: &TwoFactorCallbackParams, cancelled: &AtomicBool) -> TwoFact
         (false, true, None) => terminal::say("Apple sent a code by text message."),
         (false, false, _) => terminal::say("Apple sent a code to your other Apple devices."),
     }
+    if page::on() {
+        return ask_code_on_page(params, selected).unwrap_or_else(|_| abort());
+    }
     let mut ways = vec!["r to send it again"];
     if !params.numbers.is_empty() {
         ways.insert(0, "s for a text message");
@@ -454,6 +460,64 @@ fn ask_code(params: &TwoFactorCallbackParams, cancelled: &AtomicBool) -> TwoFact
     }
 }
 
+/// Asks for Apple's code on the page, or for another way to get one. Err
+/// when the page can't ask.
+fn ask_code_on_page(
+    params: &TwoFactorCallbackParams,
+    selected: Option<&TrustedNumber>,
+) -> Result<TwoFactorCallbackResponse, Stop> {
+    let texted = match (params.unknown, params.sms, selected) {
+        (false, true, Some(number)) => Some(number.number_with_dial_code.clone()),
+        (false, true, None) => Some(String::new()),
+        _ => None,
+    };
+    let mut problem = params.last_error.clone();
+    loop {
+        let answer = page::ask(View::Code {
+            texted: texted.clone(),
+            problem: problem.take(),
+            by_text: !params.numbers.is_empty(),
+            to_devices: params.sms || params.unknown,
+        })?;
+        match answer.text("action") {
+            "again" => return Ok(TwoFactorCallbackResponse::ResendCode),
+            "devices" => return Ok(TwoFactorCallbackResponse::SendToDevices),
+            "text" => match params.numbers.as_slice() {
+                [] => problem = Some("This Apple ID has no phone number for codes.".into()),
+                [number] => return Ok(TwoFactorCallbackResponse::SendSms(number.id)),
+                numbers => {
+                    let picked = page::ask(View::Question {
+                        title: "Which number?".into(),
+                        text: vec!["Apple texts the code to the number you pick.".into()],
+                        options: numbers
+                            .iter()
+                            .map(|number| number.number_with_dial_code.clone())
+                            .collect(),
+                        yes: "Text it".into(),
+                        no: Some("Back".into()),
+                    })?;
+                    if let Some(number) = picked.pick().and_then(|index| numbers.get(index))
+                        && picked.yes()
+                    {
+                        return Ok(TwoFactorCallbackResponse::SendSms(number.id));
+                    }
+                }
+            },
+            _ => {
+                let digits: String = answer
+                    .text("code")
+                    .chars()
+                    .filter(char::is_ascii_digit)
+                    .collect();
+                if digits.len() == 6 {
+                    return Ok(TwoFactorCallbackResponse::SubmitCode(digits));
+                }
+                problem = Some("Apple's code is 6 digits.".into());
+            }
+        }
+    }
+}
+
 /// What went wrong with Apple, from isideload's report.
 #[derive(Debug)]
 enum Problem {
@@ -497,7 +561,7 @@ impl Problem {
     fn explain(self, tried: usize) -> Stop {
         match self {
             Problem::Cancelled => Stop::new("Stopped: no code was given"),
-            Problem::SignIn(-20101, _) => Stop::new("Apple says the Apple ID or password is wrong"),
+            Problem::SignIn(-20101, _) => Stop::new(WRONG_PASSWORD),
             Problem::SignIn(-20209, _) => Stop::new("Apple says this Apple ID is locked")
                 .next("Unlock it at iforgot.apple.com, then run this again."),
             Problem::SignIn(-80045, _) => {
@@ -647,12 +711,14 @@ pub async fn sign(
             ipa.name, ipa.version, ipa.bundle_id
         ),
     );
-    if app_ids
+    // The page's line on it.
+    let app_id = if app_ids
         .app_ids
         .iter()
         .any(|app_id| app_id.identifier == bundle_id)
     {
         terminal::say("Apple has its App ID already, so it takes none of this week's.");
+        "Apple has it already, so it takes none of this week's.".to_string()
     } else {
         match app_ids.available_quantity {
             Some(left) if left <= 0 => {
@@ -660,18 +726,38 @@ pub async fn sign(
                     .next("A free Apple ID gets 10 a week, each back 7 days after it was added.")
                     .next("Run this again then, or sign in with another Apple ID."));
             }
-            Some(left) => terminal::say(format!(
-                "Apple adds an App ID for it: 1 of the {left} this Apple ID has left this week."
-            )),
-            None => terminal::say("Apple adds an App ID for it."),
+            Some(left) => {
+                terminal::say(format!(
+                    "Apple adds an App ID for it: 1 of the {left} this Apple ID has left this week."
+                ));
+                format!("Apple adds one: 1 of the {left} your Apple ID has left this week.")
+            }
+            None => {
+                terminal::say("Apple adds an App ID for it.");
+                "Apple adds one.".to_string()
+            }
         }
-    }
+    };
     terminal::say(
         "With a free Apple ID, it opens for 7 days, and an iPhone holds 3 such apps at a time.",
     );
-    if !terminal::confirm("Sign and install it?")? {
+    let yes = if page::on() {
+        page::ask(View::Review {
+            release: format!("{} {}", ipa.name, ipa.version),
+            size: megabytes(std::fs::metadata(&ipa.path).map_or(0, |file| file.len())),
+            app_id,
+        })?
+        .yes()
+    } else {
+        terminal::confirm("Sign and install it?")?
+    };
+    if !yes {
         return Err(Stop::new("Stopped: nothing was signed or installed"));
     }
+    page::show(View::Installing {
+        signed: false,
+        bar: Bar::new(0.0, SIGNING),
+    });
 
     sideloader
         .get_dev_session()
@@ -690,6 +776,7 @@ pub async fn sign(
             f64::from(fraction),
             format!("{}%", (fraction * 100.0) as u32),
         );
+        page::bar(f64::from(fraction), SIGNING);
     };
     let checked_in = awake::checked_in();
     let (app, _) = sideloader
@@ -736,10 +823,44 @@ pub async fn sign(
     })
 }
 
+/// What the page's bar says as it signs.
+const SIGNING: &str = "Signing Atelier";
+
+/// A size as the website gives it: 12,792,528 bytes as 12.8 MB.
+fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1e6)
+}
+
 /// Which of the Apple ID's teams to sign with, when it's in several.
 // isideload's `TeamSelection` takes this very type.
 #[allow(clippy::ptr_arg)]
 fn pick_team(teams: &Vec<DeveloperTeam>) -> Option<String> {
+    if page::on() {
+        let names = teams
+            .iter()
+            .map(|team| {
+                format!(
+                    "{} ({})",
+                    team.name.as_deref().unwrap_or("No name"),
+                    team.team_id
+                )
+            })
+            .collect();
+        let answer = page::ask(View::Question {
+            title: "Which team signs Atelier?".into(),
+            text: vec!["This Apple ID is in more than one team.".into()],
+            options: names,
+            yes: "Continue".into(),
+            no: Some("Stop".into()),
+        })
+        .ok()?;
+        let team = teams.get(answer.pick().filter(|_| answer.yes())?)?;
+        terminal::say_personal(
+            format!("Signs with {}.", team.team_id),
+            "Signs with the team picked.",
+        );
+        return Some(team.team_id.clone());
+    }
     terminal::say("This Apple ID is in more than one team:");
     for (index, team) in teams.iter().enumerate() {
         terminal::say_personal(
@@ -772,15 +893,22 @@ fn logged_machine(made_on: &str) -> &str {
 /// one revoked just before.
 fn pick_certificates(certificates: &[DevelopmentCertificate], again: bool) -> Option<Vec<String>> {
     println!();
-    if again {
-        terminal::say("Apple still counts the certificate you revoked, though it no longer");
-        terminal::say("lists it. Waiting hasn't helped with that before, even for 25 minutes,");
-        terminal::say("but revoking another has, though apps signed with that one stop");
-        terminal::say("opening too, until they're signed again.");
+    let why: &[&str] = if again {
+        &[
+            "Apple still counts the certificate you revoked, though it no longer",
+            "lists it. Waiting hasn't helped with that before, even for 25 minutes,",
+            "but revoking another has, though apps signed with that one stop",
+            "opening too, until they're signed again.",
+        ]
     } else {
-        terminal::say("This Apple ID has as many certificates as Apple allows.");
-        terminal::say("Apple only makes another once one is revoked, and apps signed with");
-        terminal::say("a revoked certificate stop opening until they're signed again.");
+        &[
+            "This Apple ID has as many certificates as Apple allows.",
+            "Apple only makes another once one is revoked, and apps signed with",
+            "a revoked certificate stop opening until they're signed again.",
+        ]
+    };
+    for line in why {
+        terminal::say(line);
     }
     let listed: Vec<&DevelopmentCertificate> = certificates
         .iter()
@@ -791,46 +919,74 @@ fn pick_certificates(certificates: &[DevelopmentCertificate], again: bool) -> Op
         return None;
     }
     for (index, certificate) in listed.iter().enumerate() {
-        let made_on = certificate
-            .machine_name
-            .as_deref()
-            .unwrap_or("an unnamed machine");
-        let expires = certificate
-            .expiration_date
-            .map(|date| {
-                format!(
-                    ", ends {}",
-                    date.to_xml_format().chars().take(10).collect::<String>()
-                )
-            })
-            .unwrap_or_default();
         // Its name has the Apple ID's owner's name in it, which stays out
         // of the log, as the log is what people share.
-        println!(
-            "  {}. {} (made on {made_on}{expires})",
-            index + 1,
-            certificate.name.as_deref().unwrap_or("Certificate")
-        );
+        println!("  {}. {}", index + 1, described(certificate));
         terminal::log(format!(
-            "  {}. made on {}{expires}",
+            "  {}. made on {}{}",
             index + 1,
-            logged_machine(made_on)
+            logged_machine(made_on(certificate)),
+            ends(certificate)
         ));
     }
-    let typed = terminal::ask("Number to revoke, or nothing to stop: ").ok()?;
-    let certificate = listed.get(typed.parse::<usize>().ok()?.checked_sub(1)?)?;
-    let made_on = certificate
-        .machine_name
-        .as_deref()
-        .unwrap_or("an unnamed machine");
-    if !terminal::confirm(&format!("Revoke the certificate made on {made_on}?")).ok()? {
-        return None;
-    }
+    let certificate = if page::on() {
+        let answer = page::ask(View::Question {
+            title: "Revoke a certificate?".into(),
+            // The terminal's lines, as one paragraph.
+            text: vec![why.join(" ")],
+            options: listed
+                .iter()
+                .map(|certificate| described(certificate))
+                .collect(),
+            yes: "Revoke it".into(),
+            no: Some("Stop".into()),
+        })
+        .ok()?;
+        listed.get(answer.pick().filter(|_| answer.yes())?)?
+    } else {
+        let typed = terminal::ask("Number to revoke, or nothing to stop: ").ok()?;
+        let certificate = listed.get(typed.parse::<usize>().ok()?.checked_sub(1)?)?;
+        let question = format!("Revoke the certificate made on {}?", made_on(certificate));
+        if !terminal::confirm(&question).ok()? {
+            return None;
+        }
+        certificate
+    };
     terminal::log(format!(
         "revoking the certificate made on {}",
-        logged_machine(made_on)
+        logged_machine(made_on(certificate))
     ));
     certificate.serial_number.clone().map(|serial| vec![serial])
+}
+
+fn made_on(certificate: &DevelopmentCertificate) -> &str {
+    certificate
+        .machine_name
+        .as_deref()
+        .unwrap_or("an unnamed machine")
+}
+
+/// When it ends, as `, ends 2026-11-20`, if Apple says.
+fn ends(certificate: &DevelopmentCertificate) -> String {
+    certificate
+        .expiration_date
+        .map(|date| {
+            format!(
+                ", ends {}",
+                date.to_xml_format().chars().take(10).collect::<String>()
+            )
+        })
+        .unwrap_or_default()
+}
+
+/// A certificate as the list to revoke from shows it, with its name.
+fn described(certificate: &DevelopmentCertificate) -> String {
+    format!(
+        "{} (made on {}{})",
+        certificate.name.as_deref().unwrap_or("Certificate"),
+        made_on(certificate),
+        ends(certificate)
+    )
 }
 
 #[cfg(test)]

@@ -38,11 +38,13 @@ mod apple;
 mod awake;
 mod blocking;
 mod certificate;
+mod door;
 mod handoff;
 mod ipa;
 mod kept;
 mod mdns;
 mod net;
+mod page;
 mod pairing;
 mod phone;
 // File reads and writes in pieces rootshell can carry, and folders,
@@ -54,6 +56,7 @@ mod chunks;
 mod listing;
 mod paths;
 mod route;
+mod source;
 mod state;
 mod terminal;
 #[cfg(test)]
@@ -73,6 +76,7 @@ use isideload::dev::developer_session::DeveloperSession;
 
 use crate::certificate::{Format, Secret};
 use crate::handoff::HandOffs;
+use crate::page::{Bar, View};
 use crate::pairing::Pairing;
 use crate::state::{AppleIdHash, State};
 use crate::terminal::Stop;
@@ -92,6 +96,9 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
   ./atelier-install.wasm --ipa <where>    install the IPA at a path or an https link
   ./atelier-install.wasm --check          only pair, and check LocalDevVPN
   ./atelier-install.wasm --sign-in        only check that Apple takes your Apple ID
+  ./atelier-install.wasm --page <link>    install Atelier's newest release, asking on
+                                          the page at <link>, http://127.0.0.1:PORT/#KEY,
+                                          as the Install Atelier Shortcut runs it
 
   --sha256 <hex>      the IPA's SHA-256, to check it against
   --address <ip>      this iPhone's Wi-Fi address, for pairing, in place of
@@ -109,7 +116,7 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
 /// The steps of a whole install.
 const STEPS: u32 = 7;
 
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct Options {
     ipa: Option<String>,
     sha256: Option<String>,
@@ -117,6 +124,8 @@ struct Options {
     port: Option<u16>,
     anisette: Option<String>,
     pairing_to: Option<String>,
+    /// The page to ask on, in place of the terminal (page.rs).
+    page: Option<page::Address>,
     redo: bool,
     check: bool,
     sign_in: bool,
@@ -168,8 +177,21 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
                     "--pairing-to takes a path in the app's container, such as Documents/pairingFile.plist"
                 })?);
             }
+            "--page" => options.page = Some(page::Address::parse(&value("--page")?)?),
             other => return Err(format!("`{other}` isn't an option")),
         }
+    }
+    if options.page.is_some()
+        && (options.ipa.is_some()
+            || options.sha256.is_some()
+            || options.pairing_to.is_some()
+            || options.check
+            || options.sign_in
+            || options.forget)
+    {
+        return Err(
+            "--page installs Atelier's newest release: it goes without --ipa, --sha256, --pairing-to, --check, --sign-in and --forget".into(),
+        );
     }
     Ok(options)
 }
@@ -202,13 +224,18 @@ fn main() -> ExitCode {
         terminal::start_log(&state::files_folder().join(LOG));
         terminal::log(format!("atelier-install {}", env!("CARGO_PKG_VERSION")));
         prepare(&state);
+        if let Some(address) = &options.page {
+            page::start(address)?;
+        }
         let result = run(&options, &state);
         // The IPA as it was unpacked and signed, unless it waits for the
         // next run to install it.
         kept::tidy(&state);
-        if result.is_err() {
+        if let Err(stop) = &result {
             println!("\nThe steps and errors of this run are in {LOG}, in rootshell's folder.");
+            page::stopped(stop);
         }
+        page::end();
         result
     });
     match result {
@@ -229,15 +256,23 @@ const LOG: &str = "atelier-install.log";
 
 /// Hands isideload what rootshell has in place of what it'd take from the
 /// system: connections, with rootshell's TLS, and files, with its
-/// temporary folder in `.atelier`. Its signing checks in as it hashes.
+/// temporary folder in `.atelier`. Its signing checks in as it hashes, and
+/// answers the page.
 fn prepare(state: &State) {
     isideload::http::set_connector(Arc::new(|host: &str, port: u16, tls: bool| {
         let stream = net::Stream::connect_host(host, port, tls)?;
         Ok(Box::new(stream) as Box<dyn isideload::http::Stream>)
     }));
     isideload_vfs::set_vfs(Box::new(vfs::StdVfs::new(state.work())));
-    apple_codesign_quick::set_check_in(awake::check_in);
+    apple_codesign_quick::set_check_in(signing_check_in);
     let _ = isideload::init();
+}
+
+/// What the signing does as it hashes: checks in with rootshell, and
+/// answers the page now and then.
+fn signing_check_in() {
+    awake::check_in();
+    page::tick();
 }
 
 /// Runs one of isideload's async steps to its end. All it waits for is
@@ -271,9 +306,19 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
     };
 
     terminal::step(2, steps, "This iPhone, through LocalDevVPN");
-    if paired_now {
+    page::paired();
+    // The page checks whether LocalDevVPN is connected, so it asks for it
+    // whenever it isn't, and only then.
+    if paired_now || page::on() {
         vpn_on()?;
     }
+    let connecting = || {
+        page::show(View::Busy {
+            title: "Connecting to this iPhone".into(),
+            bar: None,
+        })
+    };
+    connecting();
     let port = options.port.or(state.port()).unwrap_or(phone::DEFAULT_PORT);
     let phone = match reach(&mut pairing, port) {
         // A pairing the iPhone has forgotten, as when it's been reset, or
@@ -283,7 +328,9 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
             terminal::say("This iPhone doesn't know the pairing any more, so it pairs anew.");
             pairing = pairing::pair(state, options.address.as_deref())?;
             paired_now = true;
+            page::paired();
             vpn_on()?;
+            connecting();
             reach(&mut pairing, port)
         }
         reached => reached,
@@ -308,6 +355,25 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
     }
 
     terminal::step(3, steps, "The IPA");
+    // The page installs Atelier's newest release, as Atelier's source lists
+    // it, with its SHA-256.
+    let release = options
+        .page
+        .as_ref()
+        .map(|_| source::newest())
+        .transpose()?;
+    let from_source;
+    let options = match &release {
+        Some(release) => {
+            from_source = Options {
+                ipa: Some(release.link.clone()),
+                sha256: Some(release.sha256.clone()),
+                ..options.clone()
+            };
+            &from_source
+        }
+        None => options,
+    };
     let kept = kept::Install::load(state);
     if options.redo {
         kept::remove(state, kept.as_ref());
@@ -322,7 +388,23 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
         // Its link: no need to download it again.
         return go_on(state, &mut pairing, port, kept);
     }
+    if let Some(release) = &release {
+        page::show(View::Busy {
+            title: format!("Downloading Atelier {}", release.version),
+            bar: Some(Bar::new(0.0, "")),
+        });
+    }
     let mut ipa = ipa::get(state, options.ipa.as_deref(), options.sha256.as_deref())?;
+    if let Some(release) = &release {
+        // The page says Atelier throughout.
+        if ipa.bundle_id != ipa::ATELIER {
+            return Err(Stop::new(format!(
+                "The IPA Atelier's source links to is {}, not Atelier",
+                ipa.bundle_id
+            )));
+        }
+        ipa.version = release.version.clone();
+    }
     terminal::say(format!("{} {} ({}).", ipa.name, ipa.version, ipa.bundle_id));
     if let Some(kept) = kept.filter(|_| !options.redo) {
         if kept.sha256 == ipa.sha256 {
@@ -450,9 +532,10 @@ fn finish(
         STEPS,
         &format!("What {} takes from this program", kept.name),
     );
-    hand_over(&mut phone, kept, signing.as_deref(), pairing, state);
+    let handed = hand_over(&mut phone, kept, signing.as_deref(), pairing, state);
     kept.remove(state);
     state.forget_download();
+    page::show(View::Done { handed });
 
     terminal::notify(&format!(
         "{} is installed. Before it opens, trust your Apple ID in Settings › General › VPN & Device Management.",
@@ -477,6 +560,10 @@ fn install_app(
     state: &State,
 ) -> Result<phone::Phone, Stop> {
     loop {
+        page::show(View::Installing {
+            signed: true,
+            bar: Bar::new(0.0, INSTALLING),
+        });
         let mut phone =
             reach(pairing, port).map_err(|problem| explain(problem, state, port, false))?;
         let shown = AtomicU64::new(u64::MAX);
@@ -485,6 +572,7 @@ fn install_app(
             awake::check_in();
             if shown.swap(percent, Ordering::Relaxed) != percent {
                 terminal::bar(percent as f64 / 100.0, format!("{percent}%"));
+                page::bar(percent as f64 / 100.0, INSTALLING);
             }
         });
         terminal::log(format!(
@@ -508,11 +596,26 @@ fn install_app(
                 );
                 terminal::say("The connection to this iPhone broke, as it can while rootshell");
                 terminal::say("isn't on screen. Stay in rootshell until it's installed.");
-                terminal::ask("Press Return to try again, or Control-C to stop. ")?;
+                if page::on() {
+                    page::ask(View::Question {
+                        title: "The connection to this iPhone broke".into(),
+                        text: vec![
+                            "Check that LocalDevVPN is connected. Atelier is signed already, so trying again only installs it.".into(),
+                        ],
+                        options: Vec::new(),
+                        yes: "Try again".into(),
+                        no: None,
+                    })?;
+                } else {
+                    terminal::ask("Press Return to try again, or Control-C to stop. ")?;
+                }
             }
         }
     }
 }
+
+/// What the page's bar says as it installs.
+const INSTALLING: &str = "Installing on this iPhone";
 
 /// Whether what stopped the install was its connection breaking, rather
 /// than the iPhone refusing it.
@@ -529,21 +632,25 @@ fn connection_broke(report: &str) -> bool {
 }
 
 /// Step 7: hands the app, as it was just installed, what it takes:
-/// `signing`, the certificate and the sign-in, when it takes them.
+/// `signing`, the certificate and the sign-in, when it takes them. Whether
+/// it has all of it, and Atelier takes both, the pairing and the sign-in.
 fn hand_over(
     phone: &mut phone::Phone,
     kept: &kept::Install,
     signing: Option<&[u8]>,
     pairing: &Pairing,
     state: &State,
-) {
+) -> bool {
     let (name, atelier) = (&kept.name, kept.ipa_bundle_id == ipa::ATELIER);
+    let mut handed = !atelier;
     if kept.hand_offs.is_empty() {
         terminal::say(format!("{name} takes nothing from this program."));
     }
+    let mut paired = kept.hand_offs.pairing.is_none();
     if let Some(path) = &kept.hand_offs.pairing {
         match phone.give(&kept.bundle_id, path, &pairing.bytes) {
             Ok(()) => {
+                paired = true;
                 let _ = fs::remove_file(state.pairing());
                 terminal::say(format!(
                     "{name} has this iPhone's pairing now, and this program's copy is deleted."
@@ -570,7 +677,7 @@ fn hand_over(
                 "This build of Atelier doesn't take a sign-in from this program. {YOURSELF}"
             ));
         }
-        return;
+        return handed;
     };
     let given = match signing {
         Some(file) => phone.give(&kept.bundle_id, path, file).map_err(|error| {
@@ -582,6 +689,7 @@ fn hand_over(
             .clone()
             .unwrap_or_else(|| "The sign-in wasn't kept from the last run.".into())),
     };
+    handed |= paired && given.is_ok();
     match given {
         Ok(()) if atelier => terminal::say(
             "Atelier has your sign-in and this program's certificate: it opens signed in, and signs with this certificate rather than asking Apple for another.",
@@ -592,6 +700,7 @@ fn hand_over(
         Err(why) if atelier => terminal::say(format!("{why} {YOURSELF}")),
         Err(why) => terminal::say(why),
     }
+    handed
 }
 
 /// Whom the run signed in as, and what the app that takes the sign-in
@@ -634,6 +743,9 @@ fn sign_in(
     state: &State,
     takes_it: Option<&ipa::Ipa>,
 ) -> Result<(DeveloperSession, Account), Stop> {
+    if page::on() {
+        return sign_in_on_page(options, state, takes_it);
+    }
     let (with_token, without_asking) = token_use(options, takes_it.map(|ipa| ipa.hand_offs.format));
     let anisette = options.anisette.as_deref();
     let kept_one = match Token::kept(state, kept::now()).as_slice() {
@@ -729,6 +841,82 @@ fn sign_in(
     ))
 }
 
+/// Signs in on the page: with the Apple ID alone first when a token is
+/// kept, which may do without the password, and asks again, saying why,
+/// when Apple says the password is wrong.
+fn sign_in_on_page(
+    options: &Options,
+    state: &State,
+    takes_it: Option<&ipa::Ipa>,
+) -> Result<(DeveloperSession, Account), Stop> {
+    let (with_token, _) = token_use(options, takes_it.map(|ipa| ipa.hand_offs.format));
+    let anisette = options.anisette.as_deref();
+    let mut password = !with_token || Token::kept(state, kept::now()).is_empty();
+    let mut problem = None;
+    let mut tried = None;
+    loop {
+        let answer = page::ask(View::SignIn {
+            password,
+            problem: problem.take(),
+        })?;
+        let email = answer.text("apple_id").trim().to_lowercase();
+        if email.is_empty() {
+            continue;
+        }
+        let hash = AppleIdHash::of(&email);
+        if with_token && tried.as_ref() != Some(&hash) {
+            tried = Some(hash.clone());
+            if let Some((developer, token)) =
+                wait(async { Ok(apple::kept_sign_in(state, &hash, anisette).await) })?
+            {
+                terminal::say("Signed in.");
+                return Ok((
+                    developer,
+                    Account {
+                        hash,
+                        email: Some(email),
+                        password: None,
+                        token,
+                    },
+                ));
+            }
+        }
+        let typed = answer.text("password");
+        if typed.is_empty() {
+            // Apple's token didn't do: the password, then.
+            password = true;
+            continue;
+        }
+        terminal::say("Signing in…");
+        let servers = wait(async { Ok(apple::servers(state, anisette).await) })?;
+        match wait(apple::sign_in(state, &servers, &email, typed)) {
+            Ok((developer, token, kept)) => {
+                terminal::say("Signed in.");
+                if kept {
+                    terminal::say(
+                        "This program keeps Apple's token for this sign-in, not the password.",
+                    );
+                }
+                return Ok((
+                    developer,
+                    Account {
+                        hash,
+                        email: Some(email),
+                        password: Some(typed.to_string()),
+                        token,
+                    },
+                ));
+            }
+            Err(stop) if stop.what == apple::WRONG_PASSWORD => {
+                terminal::say(format!("{}.", apple::WRONG_PASSWORD));
+                password = true;
+                problem = Some(format!("{}.", apple::WRONG_PASSWORD));
+            }
+            Err(stop) => return Err(stop),
+        }
+    }
+}
+
 /// What --forget says before it deletes anything, as approved on 13 Nov
 /// 2026: without the signing key, the next run needs a new certificate,
 /// which at Apple's limit means revoking one, maybe Atelier's.
@@ -796,8 +984,26 @@ fn signing_file(
     Ok(certificate.hand_off(&sign_in))
 }
 
-/// Has the user connect LocalDevVPN, which the pairing went without.
+/// Has the user connect LocalDevVPN, which the pairing went without. On
+/// the page, only when the Shortcut's `ifconfig` didn't list it.
 fn vpn_on() -> Result<(), Stop> {
+    if page::on() {
+        let saved = fs::read_to_string(state::files_folder().join(pairing::IFCONFIG_FILE))
+            .unwrap_or_default();
+        if address::local_dev_vpn(&saved) {
+            terminal::say("LocalDevVPN was connected when the Shortcut started.");
+            return Ok(());
+        }
+        terminal::say("Now open LocalDevVPN and tap Connect, if it isn't connected.");
+        page::ask(View::Question {
+            title: "Connect LocalDevVPN".into(),
+            text: vec!["Open LocalDevVPN and tap Connect, then come back here.".into()],
+            options: Vec::new(),
+            yes: "It's connected".into(),
+            no: None,
+        })?;
+        return Ok(());
+    }
     // The pairing ends in Settings, where the terminal doesn't show.
     terminal::notify(
         "Paired. Open LocalDevVPN and tap Connect if it isn't connected, then come back to rootshell.",
@@ -905,6 +1111,39 @@ mod tests {
         assert!(options(&["--redo"]).unwrap().redo);
         assert!(options(&["--other-apple-id"]).unwrap().other_apple_id);
         assert!(options(&["-h"]).unwrap().help);
+    }
+
+    #[test]
+    fn takes_the_pages_address_and_nothing_that_goes_against_it() {
+        const PAGE: &str = "http://127.0.0.1:24680/#123456789987654321111111111";
+        let read = options(&["--page", PAGE]).unwrap();
+        assert_eq!(read.page.map(|page| page.port), Some(24680));
+        assert!(options(&["--page", "http://127.0.0.1:24680/"]).is_err());
+        let sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        for against in [
+            &["--ipa", "Atelier.ipa"][..],
+            &["--sha256", sha256],
+            &["--pairing-to", "Documents/pairingFile.plist"],
+            &["--check"],
+            &["--sign-in"],
+            &["--forget"],
+        ] {
+            let mut arguments = vec!["--page", PAGE];
+            arguments.extend_from_slice(against);
+            assert!(options(&arguments).is_err(), "{against:?}");
+        }
+        assert!(
+            options(&[
+                "--page",
+                PAGE,
+                "--redo",
+                "--port",
+                "49153",
+                "--anisette",
+                "https://anisette.example"
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

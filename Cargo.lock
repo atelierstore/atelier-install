@@ -211,6 +211,7 @@ dependencies = [
  "plist",
  "rootcause",
  "rsa",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
@@ -1165,8 +1166,6 @@ dependencies = [
 [[package]]
 name = "idevice"
 version = "0.1.68"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d7799c8497cef60ddfd38f7d92e267b9fa5d0b18e7691d31041453007400ca"
 dependencies = [
  "aes 0.8.4",
  "async-stream",

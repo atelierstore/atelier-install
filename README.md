@@ -38,7 +38,7 @@ Every step runs in one App Store app, as one program. There's no computer at any
    - The program connects to iOS's RemotePairing service at 10.7.0.1 through LocalDevVPN, on port 49152 or the port that worked last.
    - It pair-verifies with the RPPairing file, asks the iPhone for a tunnel listener, connects to it, and runs the TLS-PSK handshake that opens a CDTunnel, which carries IP packets.
    - Over the CDTunnel, a userspace TCP stack (jktcp) reaches RemoteServiceDiscovery, which lists the iPhone's services: lockdownd for its name and UDID, AFC, installation_proxy and house_arrest.
-3. **The IPA** (`src/ipa.rs`). It comes from rootshell's folder, a path or an HTTPS link, and is checked against its SHA-256 when you give one. Its Info.plist gives the bundle ID, the name, the version, and what the app takes.
+3. **The IPA** (`src/ipa.rs`, `src/source.rs`). It comes from rootshell's folder, a path or an HTTPS link, and is checked against its SHA-256 when you give one. With `--page`, it's Atelier's newest release, from Atelier's source. Its Info.plist gives the bundle ID, the name, the version, and what the app takes.
 4. **The sign-in** (`src/apple.rs`, `src/route.rs`, `src/token.rs`).
    - The program signs in with GrandSlam's SRP, using the Apple ID and password, and Apple's two-factor code when Apple asks for one.
    - It goes through an anisette v3 server from Atelier's list. Each server's provisioned state is kept, so Apple sees the same machine every time.
@@ -48,6 +48,8 @@ Every step runs in one App Store app, as one program. There's no computer at any
    - isideload then signs the bundle with apple-codesign-quick: the code directories, the entitlements from the profile, and a CMS signature with the certificate.
 6. **The install** (`src/phone.rs`). AFC uploads the signed bundle to `PublicStaging`, and installation_proxy installs it with `PackageType` `Developer`, as Xcode does.
 7. **The hand-off** (`src/handoff.rs`, `src/certificate.rs`). house_arrest opens the app's container, and the program writes what the app's Info.plist declares, at the paths it declares: this iPhone's pairing, the signing identity (the certificate, its key and the Apple ID's sign-in, with the password or Apple's token), or both.
+
+With `--page`, the program also serves its page (`src/page.rs`, `src/page/`) at 127.0.0.1 on the Shortcut's port, one connection at a time: while it waits for an answer, and between the pieces of its work. The page asks for the program's state about every second and posts what you type back as JSON. rootshell's listener takes connections on every address the iPhone has, and anything on the iPhone can reach 127.0.0.1. So only a request that carries the key from the page's address can read the state or answer it, and only under the name 127.0.0.1 or localhost. The page's Content-Security-Policy lets it load nothing but its own files.
 
 ## The tricks that made it work
 
@@ -60,7 +62,9 @@ Every step runs in one App Store app, as one program. There's no computer at any
 - **Check-ins.** rootshell runs its programs in a web view that isn't in any window, and WebKit can suspend such a view's work (`WKPreferences.inactiveSchedulingPolicy`). On an iPhone, a computation that asked rootshell nothing, hashing a 38 MB binary, stopped until a key was pressed. So at most every 50 ms, the program makes a call to rootshell that changes nothing (`fd_prestat_get`). It does so from the signing's hashing, through a patched copy of apple-codesign-quick, from the download, from the install, and from every 64th allocation (`src/awake.rs`).
 - **Connections that never time out.** Network.framework keeps a connection waiting for a server that doesn't answer. So the program notes what it's waiting for, and the run after a Control-C tries that server last. It also goes straight to ports it knows instead of scanning for one.
 - **The same machine to Apple.** The anisette state is kept for each server, and handed to the app along with the sign-in, so Apple doesn't ask for a code again.
-- **Staying alive in Settings.** rootshell's Location Diary Mode keeps it running in the background while you type the code in Settings. It has to be Session Only: Auto During Active Sessions doesn't count a WebAssembly program as a session, so it stays off while the program runs. Notifications (OSC 777) bring you back to it. rootshell only shows them while Location Diary keeps it running in the background, or for a tab that isn't on screen.
+- **Knocking on its own port.** rootshell's `accept` waits until a connection comes, and there's no poll. So to see whether the page or the iPhone is waiting, the program connects to its own port and sends a random word, a knock. `accept` then returns at once: with a connection that came before the knock, or with the knock itself, which means nobody was waiting (`src/door.rs`). The program numbers its knocks, because rootshell gives a stopped program's leftover `accept` the next program's first connection.
+- **The pairing's code, chosen in advance.** idevice's pairing host makes the code only once Settings has started pairing. Its copy here takes a code chosen beforehand (`vendor/idevice`), so the page can show the code before you go to Settings.
+- **Staying alive in Settings.** rootshell's Location Diary Mode keeps it running in the background while you type the code in Settings. It has to be Session Only: Auto During Active Sessions doesn't count a WebAssembly program as a session, so it stays off while the program runs. rootshell doesn't show the program's notifications (OSC 777) from the background, for the same reason: it keeps them until it's in front again, where it skips them. So the pairing's code is read in rootshell itself.
 
 ## Using it
 
@@ -69,26 +73,28 @@ You need:
 - iOS 27 or later, with Developer Mode on (Settings › Privacy & Security › Developer Mode).
 - Wi-Fi. iOS refuses LocalDevVPN's connections to its services over mobile data.
 - LocalDevVPN, from the App Store.
-- rootshell, from the App Store, with Location Diary Mode on and set to Session Only, and Terminal Notifications on, both in its Settings › General. Session Only goes off when rootshell closes, so turn it on again before a later run.
+- rootshell, from the App Store, with Location Diary Mode on and set to Session Only, in its Settings › General. Session Only goes off when rootshell closes, so turn it on again before a later run.
 - An Apple ID. With a free one, apps open for 7 days.
 
-In rootshell, run these one line at a time:
+In rootshell, run this line:
 
 ```sh
-curl -fsSLO https://github.com/atelierstore/atelier-install/releases/latest/download/atelier-install.wasm
-ifconfig en0 > ifconfig.txt
-./atelier-install.wasm --ipa https://example.com/App.ipa --sha256 <the IPA's SHA-256>
+true && curl -fsSLO https://github.com/atelierstore/atelier-install/releases/latest/download/atelier-install.wasm && ifconfig en0 > ifconfig.txt && ./atelier-install.wasm --ipa https://example.com/App.ipa --sha256 <the IPA's SHA-256>
 ```
 
-You only need `ifconfig.txt` the first time, to pair. Without `--ipa`, the program installs the IPA in rootshell's folder.
+It downloads the program's latest release, saves the iPhone's Wi-Fi address in `ifconfig.txt` for pairing, and runs the program. It starts with `true` so that rootshell runs the whole line itself: rootshell starts a `.wasm` program after `&&` only when the line starts with one of its own commands, such as `true`. To install Atelier, [atelierstore.app/apple-id](https://atelierstore.app/apple-id) fills in this line with Atelier's newest release and its SHA-256.
 
-When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › Developer Mode, and type the code the program shows. The code also comes as a notification. Then connect LocalDevVPN and come back to rootshell. The program says what the install takes from your Apple ID, such as a certificate, and asks before it goes on. At Apple's limit of certificates, it asks which one to revoke. It never revokes one by itself. Stay in rootshell while it installs. Then trust your Apple ID in Settings › General › VPN & Device Management, and open the app. This build doesn't renew it: run it again before the 7 days are over.
+Later, `./atelier-install.wasm` and its options alone run the program again. You only need `ifconfig.txt` the first time, to pair. Without `--ipa`, the program installs the IPA in rootshell's folder.
+
+When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › Developer Mode, and enter your passcode. Settings then asks for a code: switch to rootshell to read it, then go back to Settings and type it. Then connect LocalDevVPN and come back to rootshell. The program says what the install takes from your Apple ID, such as a certificate, and asks before it goes on. At Apple's limit of certificates, it asks which one to revoke. It never revokes one by itself. Stay in rootshell while it installs. Then trust your Apple ID in Settings › General › VPN & Device Management, and open the app. This build doesn't renew it: run it again before the 7 days are over.
 
 ```
 ./atelier-install.wasm                  install the IPA in rootshell's folder
 ./atelier-install.wasm --ipa <where>    install the IPA at a path or an https link
 ./atelier-install.wasm --check          only pair, and check LocalDevVPN
 ./atelier-install.wasm --sign-in        only check that Apple takes your Apple ID
+./atelier-install.wasm --page <link>    install Atelier's newest release, asking on
+                                        the page at <link>, http://127.0.0.1:PORT/#KEY
 
   --sha256 <hex>      the IPA's SHA-256, to check it against
   --address <ip>      this iPhone's Wi-Fi address, for pairing, in place of ifconfig.txt
@@ -101,6 +107,8 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
                       with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
 ```
+
+**With the Install Atelier Shortcut,** the program asks on a page of its own instead of the terminal, in the website's look. The Shortcut connects LocalDevVPN, picks a port and a key, and has rootshell run the line with `ifconfig > ifconfig.txt` and `./atelier-install.wasm --page http://127.0.0.1:PORT/#KEY`. Then it shows that page over rootshell. With `--page`, the program installs Atelier's newest release, with the link and SHA-256 that Atelier's source lists. The page shows the pairing's code before you go to Settings. It asks you to connect LocalDevVPN only when `ifconfig.txt` doesn't list it, and skips pairing when the program kept a pairing. The terminal still says everything, and the log stays as it is.
 
 **A run that stops picks up where it left off.** What each step makes is kept until the install is done. That covers the download and, from the signing on, the signed app and what the app takes. A run for the same IPA, by its link or its SHA-256, goes straight to the install. If the install's connection breaks, which can happen while rootshell isn't on screen, the program asks to try again. Everything kept goes once the app is installed, a day after the signing, with `--redo`, or with `--forget`. If nothing more shows within a minute, a server isn't answering. Press Control-C and run it again, and it tries that server last.
 
