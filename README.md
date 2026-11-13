@@ -161,7 +161,7 @@ An RPPairing file, as idevice writes it (`RpPairingFile`): an XML plist with the
 
 ### The signing identity
 
-The Apple ID's sign-in and the certificate the app was signed with, as an XML plist (`src/certificate.rs`). With it, the app signs in to Apple as you, as the same machine, so Apple doesn't ask for a code again, and signs with the same certificate. Atelier moves it on its first launch, with the password or the token going into its Keychain. An app should do the same rather than leave the file in its container.
+The Apple ID's sign-in and the certificate the app was signed with, as an XML plist (`src/certificate.rs`). With it, the app signs in to Apple as you, as the same machine, so Apple doesn't ask for a code again, and signs with the same certificate. Atelier moves it on its first launch and keeps only Apple's token, in its Keychain: handed the password, it signs in with it once to get one. An app should do the same rather than leave the file in its container.
 
 In both versions:
 
