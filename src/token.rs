@@ -22,9 +22,8 @@ use std::io;
 use std::path::PathBuf;
 
 use isideload::auth::apple_account::AppToken;
-use sha2::{Digest, Sha256};
 
-use crate::state::{self, State};
+use crate::state::{self, AppleIdHash, State};
 
 /// How long before Apple's end for it that the token goes: a run takes
 /// minutes, and shouldn't find it gone halfway.
@@ -102,20 +101,32 @@ impl Token {
             .is_none_or(|end| now.saturating_add(MARGIN) < end)
     }
 
-    /// The one kept for `email`, unless there's none, or it's too near its
-    /// end to try, which this then deletes.
-    pub fn load(state: &State, email: &str, now: u64) -> Option<Token> {
-        let token = read(state, email)?;
+    /// The one kept for `account`, unless there's none, or it's too near
+    /// its end to try, which this then deletes.
+    pub fn load(state: &State, account: &AppleIdHash, now: u64) -> Option<Token> {
+        let token = read(state, account)?;
         if token.usable(now) {
             Some(token)
         } else {
-            Token::forget(state, email);
+            Token::forget(state, account);
             None
         }
     }
 
-    /// Keeps it for `email`, in place of the last one.
-    pub fn save(&self, state: &State, email: &str) -> io::Result<()> {
+    /// The Apple IDs a token worth trying is kept for, by their hashes, in
+    /// no particular order.
+    pub fn kept(state: &State, now: u64) -> Vec<AppleIdHash> {
+        let Ok(folders) = fs::read_dir(state.apple()) else {
+            return Vec::new();
+        };
+        folders
+            .filter_map(|folder| AppleIdHash::from_name(folder.ok()?.file_name().to_str()?))
+            .filter(|account| Token::load(state, account, now).is_some())
+            .collect()
+    }
+
+    /// Keeps it for `account`, in place of the last one.
+    pub fn save(&self, state: &State, account: &AppleIdHash) -> io::Result<()> {
         let text = |value: &str| plist::Value::String(value.to_string());
         let mut record = plist::Dictionary::new();
         record.insert("Server".into(), text(&self.server));
@@ -138,30 +149,27 @@ impl Token {
         plist::Value::Dictionary(record)
             .to_writer_xml(&mut bytes)
             .map_err(io::Error::other)?;
-        let path = path(state, email);
+        let path = path(state, account);
         if let Some(folder) = path.parent() {
             fs::create_dir_all(folder)?;
         }
         state::write_new(&path, &bytes)
     }
 
-    /// Deletes the one kept for `email`.
-    pub fn forget(state: &State, email: &str) {
-        let _ = fs::remove_file(path(state, email));
+    /// Deletes the one kept for `account`.
+    pub fn forget(state: &State, account: &AppleIdHash) {
+        let _ = fs::remove_file(path(state, account));
     }
 }
 
-/// Where the token for `email` is kept: by isideload's key for it, which
+/// Where the token for `account` is kept: by the signing key for it, which
 /// is under the same hash (`certificate.rs`).
-fn path(state: &State, email: &str) -> PathBuf {
-    state
-        .apple()
-        .join(hex::encode(Sha256::digest(email.as_bytes())))
-        .join("sign-in.plist")
+fn path(state: &State, account: &AppleIdHash) -> PathBuf {
+    state.apple().join(account.as_str()).join("sign-in.plist")
 }
 
-fn read(state: &State, email: &str) -> Option<Token> {
-    let bytes = fs::read(path(state, email)).ok()?;
+fn read(state: &State, account: &AppleIdHash) -> Option<Token> {
+    let bytes = fs::read(path(state, account)).ok()?;
     let record = plist::Value::from_reader(io::Cursor::new(bytes))
         .ok()?
         .into_dictionary()?;
@@ -226,31 +234,62 @@ mod tests {
     fn keeps_one_for_each_apple_id_and_lets_an_old_one_go() {
         let folder = crate::testing::scratch("token");
         let state = State::at(folder.clone());
-        assert!(Token::load(&state, "a@example.com", NOW).is_none());
+        let (a, b) = (
+            AppleIdHash::of("a@example.com"),
+            AppleIdHash::of("b@example.com"),
+        );
+        assert!(Token::load(&state, &a, NOW).is_none());
 
         let kept = token((NOW + 3600) * 1000, 3600);
-        kept.save(&state, "a@example.com").unwrap();
-        assert!(Token::load(&state, "a@example.com", NOW) == Some(kept.clone()));
-        assert!(Token::load(&state, "b@example.com", NOW).is_none());
+        kept.save(&state, &a).unwrap();
+        assert!(Token::load(&state, &a, NOW) == Some(kept.clone()));
+        assert!(Token::load(&state, &b, NOW).is_none());
         // Neither the Apple ID nor anything of it in the clear.
-        let written = fs::read_to_string(path(&state, "a@example.com")).unwrap();
+        let written = fs::read_to_string(path(&state, &a)).unwrap();
         assert!(!written.contains("example.com"));
 
         let mut without = kept.clone();
         without.client_info = None;
-        without.save(&state, "a@example.com").unwrap();
-        assert!(Token::load(&state, "a@example.com", NOW) == Some(without));
+        without.save(&state, &a).unwrap();
+        assert!(Token::load(&state, &a, NOW) == Some(without));
 
         // Too near its end: it goes.
-        assert!(Token::load(&state, "a@example.com", NOW + 3600 - 60).is_none());
-        assert!(!path(&state, "a@example.com").exists());
+        assert!(Token::load(&state, &a, NOW + 3600 - 60).is_none());
+        assert!(!path(&state, &a).exists());
 
-        kept.save(&state, "a@example.com").unwrap();
-        Token::forget(&state, "a@example.com");
-        assert!(Token::load(&state, "a@example.com", NOW).is_none());
+        kept.save(&state, &a).unwrap();
+        Token::forget(&state, &a);
+        assert!(Token::load(&state, &a, NOW).is_none());
 
-        fs::write(path(&state, "a@example.com"), b"not a plist").unwrap();
-        assert!(Token::load(&state, "a@example.com", NOW).is_none());
+        fs::write(path(&state, &a), b"not a plist").unwrap();
+        assert!(Token::load(&state, &a, NOW).is_none());
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn finds_the_apple_ids_a_token_is_kept_for() {
+        let folder = crate::testing::scratch("token-kept");
+        let state = State::at(folder.clone());
+        assert!(Token::kept(&state, NOW).is_empty());
+        let (a, b) = (
+            AppleIdHash::of("a@example.com"),
+            AppleIdHash::of("b@example.com"),
+        );
+        token((NOW + 3600) * 1000, 3600).save(&state, &a).unwrap();
+        // A key alone, a token near its end, and a folder of another name.
+        fs::create_dir_all(state.apple().join(b.as_str())).unwrap();
+        fs::write(state.apple().join(b.as_str()).join("key"), b"key").unwrap();
+        let c = AppleIdHash::of("c@example.com");
+        token(NOW + 60, 0).save(&state, &c).unwrap();
+        fs::create_dir_all(state.apple().join("not-a-hash")).unwrap();
+        assert_eq!(Token::kept(&state, NOW), std::slice::from_ref(&a));
+
+        token((NOW + 3600) * 1000, 3600).save(&state, &b).unwrap();
+        let mut both = Token::kept(&state, NOW);
+        both.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+        let mut expected = vec![a, b];
+        expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+        assert_eq!(both, expected);
         fs::remove_dir_all(folder).unwrap();
     }
 }

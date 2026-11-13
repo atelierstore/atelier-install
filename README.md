@@ -98,6 +98,8 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
   --pairing-to <path> where the app takes this iPhone's pairing, in its container,
                       when its Info.plist doesn't say (it's asked)
   --redo              sign the IPA anew, where a run that stopped would go on
+  --other-apple-id    ask for the Apple ID, where the program would sign in
+                      with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
 ```
 
@@ -109,7 +111,7 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
 
 Everything stays on the iPhone. The password goes to Apple, and to the app being installed only when that app takes the sign-in (see [what your app takes](#for-app-developers-what-your-app-takes)). Atelier takes it, and the program says so before you type the password. Any other app gets it only once you've said yes.
 
-After a sign-in, the program keeps Apple's token for its developer services, not the password, so that its next run signs in without the password or a code. The token is kept under a hash of the Apple ID, so its file doesn't name the Apple ID. The token is deleted when Apple refuses it, 15 minutes before Apple says it ends, or with `--forget`. `--sign-in` still asks for the password, because it checks it.
+After a sign-in, the program keeps Apple's token for its developer services, not the password, so that its next run signs in without the password or a code. The token is kept under a hash of the Apple ID, so its file doesn't name the Apple ID. When a token is kept for one Apple ID only, the next run signs in with it without asking for the Apple ID; `--other-apple-id` asks for one. The token is deleted when Apple refuses it, 15 minutes before Apple says it ends, or with `--forget`. `--sign-in` still asks for the password, because it checks it.
 
 A run for an app that takes the sign-in asks for the password whenever it signs in, because the app takes it too. From the signing until the app has them, the Apple ID and password wait in `.atelier` with the signed app, so that a run that stops can still hand them over. They're deleted once the app has them, a day after the signing, with `--redo`, or with `--forget`.
 

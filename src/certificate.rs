@@ -26,8 +26,9 @@ use rootcause::Report;
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::pkcs8::DecodePrivateKey;
-use sha2::{Digest, Sha256};
 use x509_cert::der::Decode;
+
+use crate::state::AppleIdHash;
 
 /// Where the hand-off goes in Atelier's container.
 pub const PATH: &str = "Library/Caches/Installer/certificate.plist";
@@ -116,13 +117,64 @@ impl Certificate {
     }
 }
 
-/// The name isideload keeps the key for `email` under: the same email it
-/// signed in with.
-fn key_name(email: &str) -> String {
-    format!("{}/key", hex::encode(Sha256::digest(email.as_bytes())))
+/// The name the signing key for `account` is kept under: isideload's,
+/// for the Apple ID it signs for.
+fn key_name(account: &AppleIdHash) -> String {
+    format!("{}/key", account.as_str())
 }
 
-/// The certificate isideload signed with for `email` in `team`: the one
+/// isideload's storage, for a signing that knows the Apple ID by its hash
+/// alone, as when a run reuses the kept sign-in without asking for it.
+/// isideload keeps the signing key under a hash of the Apple ID it's
+/// given. Given the hash in its place, it would hash that again, so what
+/// it keeps under the hash of `account`'s hash goes under `account`'s,
+/// where it went when it was given the Apple ID.
+pub struct ByAppleIdHash<S> {
+    inner: S,
+    given: String,
+    account: String,
+}
+
+impl<S: SideloadingStorage> ByAppleIdHash<S> {
+    pub fn new(inner: S, account: &AppleIdHash) -> Self {
+        ByAppleIdHash {
+            inner,
+            given: AppleIdHash::of(account.as_str()).as_str().to_string(),
+            account: account.as_str().to_string(),
+        }
+    }
+
+    fn key(&self, key: &str) -> String {
+        match key.strip_prefix(self.given.as_str()) {
+            Some(rest) if rest.starts_with('/') => format!("{}{rest}", self.account),
+            _ => key.to_string(),
+        }
+    }
+}
+
+impl<S: SideloadingStorage> SideloadingStorage for ByAppleIdHash<S> {
+    fn store(&self, key: &str, value: &str) -> Result<(), Report> {
+        self.inner.store(&self.key(key), value)
+    }
+
+    fn retrieve(&self, key: &str) -> Result<Option<String>, Report> {
+        self.inner.retrieve(&self.key(key))
+    }
+
+    fn store_data(&self, key: &str, value: &[u8]) -> Result<(), Report> {
+        self.inner.store_data(&self.key(key), value)
+    }
+
+    fn retrieve_data(&self, key: &str) -> Result<Option<Vec<u8>>, Report> {
+        self.inner.retrieve_data(&self.key(key))
+    }
+
+    fn delete(&self, key: &str) -> Result<(), Report> {
+        self.inner.delete(&self.key(key))
+    }
+}
+
+/// The certificate isideload signed with for `account` in `team`: the one
 /// Apple lists as made on `machine_name` with the key `storage` keeps, as
 /// isideload finds it. None when there's no key, or Apple doesn't list the
 /// certificate, as once it's revoked or expired.
@@ -130,10 +182,10 @@ pub async fn kept(
     storage: &dyn SideloadingStorage,
     developer: &mut DeveloperSession,
     team: &DeveloperTeam,
-    email: &str,
+    account: &AppleIdHash,
     machine_name: &str,
 ) -> Result<Option<Certificate>, Report> {
-    let Some(private_key) = storage.retrieve_data(&key_name(email))? else {
+    let Some(private_key) = storage.retrieve_data(&key_name(account))? else {
         return Ok(None);
     };
     let public_key = RsaPrivateKey::from_pkcs8_der(&private_key)?
@@ -193,13 +245,43 @@ mod tests {
     const TEST_CERTIFICATE: &[u8] = include_bytes!("../tests/data/test-certificate.der");
     const TEST_PUBLIC_KEY: &[u8] = include_bytes!("../tests/data/test-public-key.der");
 
+    /// sha256("someone@example.com"), as isideload names the key's folder.
+    const HASH: &str = "72497f475e4f76d0b28f57c73a084ece576d170874eba3ee2609d9afe4b71aab";
+
     #[test]
     fn the_key_is_found_under_isideloads_name() {
-        // sha256("someone@example.com")
+        let account = AppleIdHash::of("someone@example.com");
+        assert_eq!(key_name(&account), format!("{HASH}/key"));
+    }
+
+    /// isideload, given the hash for the Apple ID, keeps and finds the key
+    /// where it did when given the Apple ID.
+    #[test]
+    fn a_signing_by_the_hash_keeps_the_key_where_the_apple_ids_went() {
+        use isideload::util::storage::InMemoryStorage;
+
+        let account = AppleIdHash::of("someone@example.com");
+        let storage = ByAppleIdHash::new(InMemoryStorage::new(), &account);
+        // isideload's own name for its key, given the hash.
+        let rehashed = format!("{}/key", AppleIdHash::of(HASH).as_str());
+        storage.store_data(&rehashed, b"key").unwrap();
         assert_eq!(
-            key_name("someone@example.com"),
-            "72497f475e4f76d0b28f57c73a084ece576d170874eba3ee2609d9afe4b71aab/key"
+            storage.inner.retrieve_data(&format!("{HASH}/key")).unwrap(),
+            Some(b"key".to_vec())
         );
+        assert_eq!(
+            storage.retrieve_data(&rehashed).unwrap(),
+            Some(b"key".to_vec())
+        );
+        // Anything else, as it is.
+        storage.store("anisette/state", "s").unwrap();
+        assert_eq!(
+            storage.inner.retrieve("anisette/state").unwrap(),
+            Some("s".into())
+        );
+        let near = format!("{}x/key", AppleIdHash::of(HASH).as_str());
+        storage.store(&near, "n").unwrap();
+        assert_eq!(storage.inner.retrieve(&near).unwrap(), Some("n".into()));
     }
 
     #[test]

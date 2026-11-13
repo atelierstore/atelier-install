@@ -34,7 +34,7 @@ use crate::certificate::{self, Certificate};
 use crate::ipa::Ipa;
 use crate::kept;
 use crate::route::{self, Failure, List, Route, Server};
-use crate::state::State;
+use crate::state::{AppleIdHash, State};
 use crate::terminal::{self, Stop};
 use crate::token::Token;
 
@@ -147,7 +147,7 @@ pub async fn sign_in(
             Ok((developer, token)) => {
                 state.set_last_server(&current.url);
                 state.clear_stalled();
-                let kept = keep(state, email, &token);
+                let kept = keep(state, &AppleIdHash::of(email), &token);
                 return Ok((developer, current.url.clone(), kept));
             }
             Err(report) => {
@@ -166,8 +166,8 @@ pub async fn sign_in(
 
 /// Keeps Apple's token for the next run, and says in the log when Apple
 /// says it ends, which tells how long a kept sign-in lasts.
-fn keep(state: &State, email: &str, token: &Token) -> bool {
-    match token.save(state, email) {
+fn keep(state: &State, account: &AppleIdHash, token: &Token) -> bool {
+    match token.save(state, account) {
         Ok(()) => {
             terminal::log(format!(
                 "kept the sign-in's token, which ends in {}",
@@ -255,17 +255,17 @@ async fn attempt(
     Ok((developer, kept))
 }
 
-/// Signs in with the token an earlier sign-in kept for `email`, without the
-/// password, through the anisette server that one went through: the
+/// Signs in with the token an earlier sign-in kept for `account`, without
+/// the password, through the anisette server that one went through: the
 /// session, and that server. None when there's no token worth trying, or
 /// Apple doesn't take it, which it then deletes. `own`: the server the
 /// user asked for, if any.
 pub async fn kept_sign_in(
     state: &State,
-    email: &str,
+    account: &AppleIdHash,
     own: Option<&str>,
 ) -> Option<(DeveloperSession, String)> {
-    let token = Token::load(state, email, kept::now())?;
+    let token = Token::load(state, account, kept::now())?;
     if own.is_some_and(|own| own != token.server) {
         terminal::log("kept sign-in: not tried, another server was asked for");
         return None;
@@ -289,7 +289,7 @@ pub async fn kept_sign_in(
         hours_left(&token)
     ));
     state.set_trying(&token.server);
-    let result = resume(state, email, &token).await;
+    let result = resume(state, account, &token).await;
     state.done_trying();
     match result {
         Ok(developer) => {
@@ -305,7 +305,7 @@ pub async fn kept_sign_in(
                 chain(&report)
             ));
             if refused {
-                Token::forget(state, email);
+                Token::forget(state, account);
                 terminal::say(
                     "Apple doesn't take that token any more, so this run asks for the password.",
                 );
@@ -333,9 +333,15 @@ fn not_worth_trying(token: &Token, state: &State) -> Option<&'static str> {
 
 /// The developer session for the kept `token`, once Apple has listed the
 /// account's teams with it.
-async fn resume(state: &State, email: &str, token: &Token) -> Result<DeveloperSession, Report> {
+async fn resume(
+    state: &State,
+    account: &AppleIdHash,
+    token: &Token,
+) -> Result<DeveloperSession, Report> {
     let provider = provider(state, &token.server, token.client_info.clone())?;
-    let account = AppleAccount::builder(email)
+    // Only its GrandSlam client and anisette are used, which don't take the
+    // Apple ID: the account isn't signed in to here.
+    let account = AppleAccount::builder(account.as_str())
         .anisette_provider(provider)
         .build()
         .await?;
@@ -545,7 +551,7 @@ pub struct Signed {
 pub async fn sign(
     state: &State,
     developer: DeveloperSession,
-    email: &str,
+    account: &AppleIdHash,
     ipa: &Ipa,
     phone_name: &str,
     udid: &str,
@@ -580,12 +586,17 @@ pub async fn sign(
         })
     };
     let mut sideloader =
+        // The hash, as the Apple ID, which isideload keeps the key by
+        // (certificate::ByAppleIdHash).
         SideloaderBuilder::<MaxCertsCallbackBox, ExtensionsBehaviorCallbackBox>::new(
             developer,
-            email.to_string(),
+            account.as_str().to_string(),
         )
         .machine_name(MACHINE_NAME.to_string())
-        .storage(Box::new(FsStorage::new(state.apple())))
+        .storage(Box::new(certificate::ByAppleIdHash::new(
+            FsStorage::new(state.apple()),
+            account,
+        )))
         .team_selection(TeamSelection::PromptOnce(pick_team))
         .max_certs_behavior(MaxCertsBehavior::Prompt(max_certs))
         // The app's extensions on the app's own profile, as the app signs.
@@ -707,7 +718,7 @@ pub async fn sign(
         &storage,
         sideloader.get_dev_session(),
         &team,
-        email,
+        account,
         MACHINE_NAME,
     )
     .await
@@ -873,9 +884,9 @@ mod tests {
 
         let folder = crate::testing::scratch("kept-sign-in");
         let state = State::at(folder.clone());
-        let (email, server) = ("a@example.com", "https://ani.example");
+        let (account, server) = (AppleIdHash::of("a@example.com"), "https://ani.example");
         let tried = |own: Option<&str>| {
-            crate::blocking::run(kept_sign_in(&state, email, own))
+            crate::blocking::run(kept_sign_in(&state, &account, own))
                 .ok()
                 .flatten()
                 .is_some()
@@ -892,7 +903,7 @@ mod tests {
             expiry: 0,
             saved_at: kept::now(),
         }
-        .save(&state, email)
+        .save(&state, &account)
         .unwrap();
         // Its server's state, the machine Apple knows it by, is gone.
         assert!(!tried(None));
@@ -909,7 +920,7 @@ mod tests {
         assert!(state.stalled_at(server));
         assert_eq!(state.take_stalled(), (vec![server.to_string()], None));
 
-        assert!(Token::load(&state, email, kept::now()).is_some());
+        assert!(Token::load(&state, &account, kept::now()).is_some());
         std::fs::remove_dir_all(folder).unwrap();
     }
 }
