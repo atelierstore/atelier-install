@@ -101,7 +101,8 @@ pub fn pair(state: &State, address: Option<&str>) -> Result<Pairing, Stop> {
     ));
     terminal::say("  3. Enter your passcode, then the code that will show here.");
     terminal::say("Leave rootshell running meanwhile. It keeps going behind Settings");
-    terminal::say("with its Settings › Location Diary Mode set to Session Only.");
+    terminal::say("with Location Diary Mode on and set to Session Only, in its");
+    terminal::say("Settings › General.");
     terminal::say(format!(
         "The entry stays in Settings for {} minutes.",
         mdns::TTL / 60
@@ -247,8 +248,9 @@ fn accept(
 }
 
 /// Shows a code in the terminal, and as a notification where rootshell
-/// sends those (its Settings › Terminal Notifications), for when the user is
-/// in Settings: the terminal takes OSC 777 for one and prints nothing.
+/// sends those (its Settings › General › Terminal Notifications), for when
+/// the user is in Settings: the terminal takes OSC 777 for one and prints
+/// nothing.
 fn show_code(what: &str, code: &str) {
     let code = spaced(code);
     println!("    {what}: {code}");

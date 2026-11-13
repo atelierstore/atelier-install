@@ -68,9 +68,11 @@ pub fn log(line: impl Display) {
 }
 
 /// Posts `text` as a notification, where rootshell sends those (its
-/// Settings › Terminal Notifications), for a user who's in another app, as
-/// in Settings to pair: the terminal takes OSC 777 for one and prints
-/// nothing. Not in the log, as it can hold the pairing's code.
+/// Settings › General › Terminal Notifications), for a user who's in
+/// another app, as in Settings to pair: the terminal takes OSC 777 for one
+/// and prints nothing. rootshell shows it only from the background, which
+/// takes Location Diary, or for a tab that isn't on screen. Not in the log,
+/// as it can hold the pairing's code.
 pub fn notify(text: &str) {
     print!("\x1b]777;notify;Atelier;{text}\x07");
     let _ = io::stdout().flush();
