@@ -1,0 +1,18 @@
+# A test for Atelier's installer, not a part of it. It is its own workspace,
+# so the installer's build, tests and lints don't see it.
+[package]
+name = "atelier-page-test"
+description = "Serves a page from rootshell (App Store) and measures how fast rootshell works behind it"
+version = "0.0.1"
+edition = "2024"
+publish = false
+license = "GPL-3.0-only"
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

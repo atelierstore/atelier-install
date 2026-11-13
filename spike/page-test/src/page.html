@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Page test</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light dark;
+  --ground: #f2f2f7;
+  --card: #ffffff;
+  --text: #1c1c1e;
+  --soft: #63636b;
+  --line: #d9d9de;
+  --bar: #1463d9;
+  --good: #1f7a3d;
+  --bad: #c22b23;
+  --button-text: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #000000;
+    --card: #1c1c1e;
+    --text: #f2f2f7;
+    --soft: #a3a3ad;
+    --line: #3a3a3f;
+    --bar: #5aa2ff;
+    --good: #45c46b;
+    --bad: #ff6f66;
+    --button-text: #04142e;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--text);
+  font: 17px/1.35 -apple-system, system-ui, "Segoe UI", sans-serif;
+}
+main {
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: 16px max(16px, env(safe-area-inset-right)) calc(24px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+h1 { margin: 0; font-size: 22px; line-height: 1.2; }
+h2 { margin: 0 0 8px; font-size: 17px; }
+p { margin: 0; }
+.top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.state { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; color: var(--soft); }
+.state::before { content: ""; width: 10px; height: 10px; border-radius: 50%; background: currentColor; }
+.state.good { color: var(--good); }
+.state.bad { color: var(--bad); }
+.lead { margin-top: 6px; color: var(--soft); font-size: 15px; }
+.card { margin-top: 14px; padding: 16px; background: var(--card); border-radius: 14px; }
+.big { display: flex; align-items: baseline; gap: 10px; }
+.big b { font-size: 52px; line-height: 1; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.big span { color: var(--soft); }
+.chart {
+  display: grid;
+  grid-template-columns: repeat(120, 1fr);
+  align-items: end;
+  height: 72px;
+  margin-top: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.chart i { display: block; height: 0; background: var(--bar); }
+.chart i.low { background: var(--bad); }
+.small { margin-top: 8px; color: var(--soft); font-size: 14px; }
+dl { margin: 0; }
+dl div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 15px; }
+dl div:first-child { border-top: 0; padding-top: 0; }
+dl div:last-child { padding-bottom: 0; }
+dt { color: var(--soft); }
+dd { margin: 0; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 600; }
+label { display: block; margin-top: 12px; font-size: 15px; color: var(--soft); }
+input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--ground);
+  color: var(--text);
+  font: inherit;
+}
+input:focus-visible, button:focus-visible { outline: 3px solid var(--bar); outline-offset: 2px; }
+button {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  margin-top: 14px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--bar);
+  color: var(--button-text);
+  font: inherit;
+  font-weight: 600;
+  touch-action: manipulation;
+}
+button:active { opacity: 0.75; }
+button:disabled { opacity: 0.5; }
+button.quiet { background: transparent; color: var(--bad); border: 1px solid var(--line); }
+.foot { margin-top: 14px; text-align: center; color: var(--soft); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <h1>Page test</h1>
+    <p class="state" id="state" role="status">Asking rootshell…</p>
+  </div>
+  <p class="lead">This page comes from a program running in rootshell. It shows how fast rootshell works while the page is in front.</p>
+
+  <section class="card">
+    <h2>rootshell's speed now</h2>
+    <p class="big"><b id="now">…</b><span>of its best second</span></p>
+    <div class="chart" id="chart" role="img" aria-label="rootshell's speed, second by second, over the last two minutes"></div>
+    <p class="small">One bar a second over the last two minutes, the newest on the right.</p>
+  </section>
+
+  <section class="card">
+    <dl>
+      <div><dt>Best second</dt><dd id="best">…</dd></div>
+      <div><dt>Longest pause</dt><dd id="pause">…</dd></div>
+      <div><dt>Its own connection takes</dt><dd id="knock">…</dd></div>
+      <div><dt>Time waiting on rootshell</dt><dd id="waiting">…</dd></div>
+      <div><dt>Running for</dt><dd id="running">…</dd></div>
+      <div><dt>This page asked</dt><dd id="asked">…</dd></div>
+      <div><dt>Connections that said nothing</dt><dd id="silent">…</dd></div>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h2>Send an answer to rootshell</h2>
+    <p class="small" style="margin-top:0">This checks that what's typed on a page reaches the program. It counts the characters and keeps nothing. Don't type a real password.</p>
+    <form id="answer">
+      <label>Any word
+        <input name="first" type="text" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next" maxlength="100">
+      </label>
+      <label>Any word, hidden as a password would be
+        <input name="second" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="send" maxlength="100">
+      </label>
+      <button type="submit">Send to rootshell</button>
+    </form>
+    <p class="small" id="answered" role="status"></p>
+  </section>
+
+  <button class="quiet" id="stop" type="button">Stop the test</button>
+  <p class="foot" id="foot">Page test</p>
+</main>
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const BARS = 120;
+  const bars = [];
+  for (let index = 0; index < BARS; index += 1) bars.push($("chart").appendChild(document.createElement("i")));
+
+  let answeredAt = Date.now();
+  let asks = 0;
+  let unanswered = 0;
+  let asking = false;
+  let over = false;
+  let timer = 0;
+
+  const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  const span = (ms) => ms < 10000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
+  const times = (count) => count === 1 ? "1 time" : `${count} times`;
+
+  function show(status) {
+    $("now").textContent = status.now === null ? "…" : `${status.now}%`;
+    const chart = status.chart;
+    bars.forEach((bar, index) => {
+      const share = chart[chart.length - BARS + index];
+      bar.style.height = share === undefined ? "0" : `${Math.max(share, share > 0 ? 3 : 0)}%`;
+      bar.className = share !== undefined && share < 50 ? "low" : "";
+    });
+    $("best").textContent = status.best ? `${(status.best / 1e6).toFixed(1)} million steps` : "…";
+    $("pause").textContent = span(status.pause_ms);
+    $("knock").textContent = status.knock_ms === null ? "…" : `${status.knock_ms} ms`;
+    $("waiting").textContent = status.waiting === null ? "…" : `${status.waiting}%`;
+    $("running").textContent = `${clock(status.running_s)} of ${status.minutes}:00`;
+    $("silent").textContent = status.silent ? `${status.silent}, the longest ${span(status.silent_ms)}` : "0";
+    $("foot").textContent = `Page test ${status.test} · port ${status.port}`;
+  }
+
+  function showState() {
+    const state = $("state");
+    const silence = Date.now() - answeredAt;
+    $("asked").textContent = `${times(asks)}, ${unanswered} unanswered`;
+    if (over) {
+      state.textContent = "The test is over";
+      state.className = "state";
+    } else if (silence < 3000) {
+      state.textContent = "rootshell is answering";
+      state.className = "state good";
+    } else {
+      state.textContent = `No answer for ${Math.round(silence / 1000)} s`;
+      state.className = "state bad";
+    }
+  }
+
+  async function ask() {
+    if (asking || over) return;
+    asking = true;
+    clearTimeout(timer);
+    const control = new AbortController();
+    const giveUp = setTimeout(() => control.abort(), 5000);
+    asks += 1;
+    try {
+      const response = await fetch("/status", { cache: "no-store", signal: control.signal });
+      if (!response.ok) throw new Error(`status ${response.status}`);
+      show(await response.json());
+      answeredAt = Date.now();
+    } catch (error) {
+      unanswered += 1;
+    }
+    clearTimeout(giveUp);
+    asking = false;
+    showState();
+    timer = setTimeout(ask, 1000);
+  }
+
+  async function post(path, body) {
+    const response = await fetch(path, { method: "POST", headers: { "X-Page-Test": "1" }, body });
+    if (!response.ok) throw new Error(`status ${response.status}`);
+    return response.json();
+  }
+
+  $("answer").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      const got = await post("/answer", new URLSearchParams(new FormData(form)));
+      $("answered").textContent = `rootshell got them: ${got.first} and ${got.second} characters.`;
+      form.reset();
+    } catch (error) {
+      $("answered").textContent = "rootshell didn't answer. Try again.";
+    }
+    button.disabled = false;
+  });
+
+  $("stop").addEventListener("click", async () => {
+    $("stop").disabled = true;
+    try {
+      await post("/stop", "");
+      over = true;
+      $("stop").textContent = "Stopped. You can close this page.";
+    } catch (error) {
+      $("stop").disabled = false;
+    }
+    showState();
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") ask();
+  });
+  setInterval(showState, 500);
+  ask();
+})();
+</script>
+</body>
+</html>
