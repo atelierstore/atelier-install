@@ -200,7 +200,7 @@ dependencies = [
 
 [[package]]
 name = "atelier-install"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "apple-codesign-quick",
  "getrandom 0.2.17",
@@ -211,6 +211,7 @@ dependencies = [
  "plist",
  "rootcause",
  "rsa",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
@@ -220,7 +221,7 @@ dependencies = [
 
 [[package]]
 name = "atelier-testphone"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -1165,8 +1166,6 @@ dependencies = [
 [[package]]
 name = "idevice"
 version = "0.1.68"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5d7799c8497cef60ddfd38f7d92e267b9fa5d0b18e7691d31041453007400ca"
 dependencies = [
  "aes 0.8.4",
  "async-stream",

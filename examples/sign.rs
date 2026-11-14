@@ -51,6 +51,12 @@ mod token;
 #[path = "../src/vfs.rs"]
 mod vfs;
 
+/// The installer's page, which this has none of.
+mod page {
+    pub fn bar(_fraction: f64, _text: impl Into<String>) {}
+    pub fn tick() {}
+}
+
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};

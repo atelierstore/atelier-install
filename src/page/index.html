@@ -1,0 +1,198 @@
+<!doctype html>
+<!--
+  The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs).
+  It carries on from atelierstore.app/apple-id, as the same page: the
+  website's header, its four steps with the first two done, and step 3
+  holding the installer's screens. Done moves into step 4. As the mockups
+  Alex approved: the screens of 13 Nov 2026, the states drawn after them,
+  and the one-page journey of 14 Nov.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<title>Install Atelier</title>
+<link rel="stylesheet" href="/page.css">
+<script src="/page.js" defer></script>
+</head>
+<body>
+<header class="hero page-hero">
+  <div class="wrap">
+    <nav class="nav">
+      <span class="brand"><img src="/icon.png" alt="" width="36" height="36"><span>Atelier</span></span>
+      <span class="on-phone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>On this iPhone</span>
+    </nav>
+    <div class="page-head">
+      <h1>Install with your Apple ID</h1>
+      <p class="lede">This page comes from the installer, running in rootshell on this iPhone. Don't close rootshell until Atelier is installed.</p>
+    </div>
+  </div>
+</header>
+<main class="page-body">
+  <div class="wrap">
+    <ol class="steps">
+      <li class="past"><span class="n" aria-hidden="true">1</span><div class="past-row"><h3>Get the two apps</h3><svg class="tick" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="11"/><path d="M6.5 11.3l3 3 6-6.3"/></svg></div></li>
+      <li class="past"><span class="n" aria-hidden="true">2</span><div class="past-row"><h3>Turn on Developer Mode</h3><svg class="tick" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="11"/><path d="M6.5 11.3l3 3 6-6.3"/></svg></div></li>
+      <li id="step-3">
+        <span class="n" aria-hidden="true">3</span>
+        <div data-part="open">
+          <h3>Install Atelier</h3>
+          <ol class="stepper" id="stepper"><li>Pair</li><li>Sign in</li><li>Install</li></ol>
+          <p class="lost" id="lost" hidden>The installer isn't answering. If it stays this way, open rootshell: its terminal says why.</p>
+          <div class="card" id="card"><p class="wait">Waiting for the installer</p></div>
+          <!-- Until it's installed or stopped: asks first, in place, then
+               ends the installer as Control-C does. -->
+          <div class="stop" id="stop" hidden>
+            <button type="button" class="stop-link" data-stop="ask">Stop the installer</button>
+            <div class="stop-ask" data-stop-part="ask" hidden>
+              <strong>Stop the installer?</strong>
+              <p>Next time, it picks up where it left off.</p>
+              <div class="stop-row">
+                <button type="button" class="btn btn-secondary" data-stop="keep">Keep going</button>
+                <button type="button" class="btn btn-primary" data-stop="stop">Stop</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="past-row" data-part="installed" hidden><div><h3>Install Atelier</h3><small data-field="installed"></small></div><svg class="tick" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="11"/><path d="M6.5 11.3l3 3 6-6.3"/></svg></div>
+      </li>
+      <li id="step-4" class="later">
+        <span class="n" aria-hidden="true">4</span>
+        <div>
+          <h3>Open Atelier</h3>
+          <p data-part="later">Once Atelier is installed.</p>
+        </div>
+      </li>
+    </ol>
+  </div>
+</main>
+
+<template id="no-key">
+  <h2>Open this page from the Shortcut</h2>
+  <p>Its address has a key that the Install Atelier Shortcut makes.</p>
+</template>
+
+<template id="busy">
+  <!-- The title is the installer's. -->
+  <h2 data-field="title"></h2>
+  <div data-part="bar">
+    <div class="bar"><i data-field="bar"></i></div>
+    <div class="bar-text"><span data-field="bar-text"></span><span data-field="percent"></span></div>
+  </div>
+  <p class="wait" data-part="wait">Working on it</p>
+</template>
+
+<template id="pair">
+  <h2>Pair your iPhone with Atelier</h2>
+  <p>This lets Atelier install apps on this iPhone. You do it once.</p>
+  <div class="code"><span>Your code</span><b data-field="code"></b></div>
+  <ol>
+    <li>Open <strong>Settings › Privacy &amp; Security › Developer Mode</strong>.</li>
+    <li>Scroll down and tap <strong>Pair with Atelier</strong>.</li>
+    <li>Enter your passcode, then this code.</li>
+  </ol>
+  <p class="note">Then come back here. The page goes on by itself.</p>
+  <p class="problem" data-field="problem" hidden></p>
+  <p class="wait">Waiting for Settings</p>
+</template>
+
+<template id="sign-in">
+  <h2>Sign in with your Apple ID</h2>
+  <p data-part="password-line">Atelier is signed with your Apple ID, free or paid. Your password goes only to Apple.</p>
+  <p data-part="token-line" hidden>The installer still has Apple's sign-in from last time. With the same Apple ID, it doesn't need your password.</p>
+  <form data-form>
+    <label class="field">Apple ID<input class="input" name="apple_id" type="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="name@example.com" required data-keep></label>
+    <label class="field" data-part="password">Password<input class="input" name="password" type="password" autocomplete="current-password" required></label>
+    <p class="problem" data-field="problem" hidden></p>
+    <button class="btn btn-primary" type="submit">Sign in</button>
+  </form>
+  <p class="note">Atelier keeps the token Apple gives it, never your password.</p>
+</template>
+
+<template id="code">
+  <h2>Enter Apple's code</h2>
+  <p data-field="sent">Apple sent a six-digit code to your devices. When this iPhone shows it, note it, then come back here.</p>
+  <form data-form>
+    <div class="digits-box">
+      <input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" aria-label="Apple's code" required>
+      <div class="digits" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    </div>
+    <p class="problem" data-field="problem" hidden></p>
+    <button class="btn btn-primary" type="submit">Continue</button>
+  </form>
+  <div class="ways">
+    <button type="button" data-action="again">Send a new code</button>
+    <button type="button" data-action="text" hidden>Text it to me</button>
+    <button type="button" data-action="devices" hidden>Send it to my devices</button>
+  </div>
+</template>
+
+<template id="question">
+  <!-- The wording is the installer's. -->
+  <h2 data-field="title"></h2>
+  <div class="text" data-field="text"></div>
+  <div class="options" data-field="options" role="radiogroup"></div>
+  <button class="btn btn-primary" type="button" data-answer="yes" data-field="yes"></button>
+  <button class="btn btn-secondary" type="button" data-answer="no" data-field="no" hidden></button>
+</template>
+
+<template id="review">
+  <h2>Sign and install Atelier?</h2>
+  <div class="release">
+    <img src="/icon.png" alt="" width="52" height="52">
+    <span class="release-name"><strong data-field="release"></strong><span data-field="size"></span></span>
+  </div>
+  <dl class="facts2">
+    <div><dt>App ID</dt><dd data-field="app-id"></dd></div>
+    <div><dt>With a free Apple ID</dt><dd>It opens for 7 days, then renews itself on Wi&#8209;Fi. An iPhone holds 3 such apps at a time.</dd></div>
+  </dl>
+  <button class="btn btn-primary" type="button" data-answer="yes">Sign and install</button>
+  <button class="btn btn-secondary" type="button" data-answer="no">Not now</button>
+</template>
+
+<template id="installing">
+  <h2>Installing Atelier</h2>
+  <div class="bar"><i data-field="bar"></i></div>
+  <div class="bar-text"><span data-field="bar-text"></span><span data-field="percent"></span></div>
+  <ul class="ticks">
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Paired with this iPhone</li>
+    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Signed in to Apple</li>
+    <li data-tick="signing" class="now">Signing Atelier</li>
+    <li data-tick="signed" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Signed Atelier</li>
+    <li data-tick="installing" class="now" hidden>Installing it</li>
+  </ul>
+  <p class="note">You can switch to another app meanwhile.</p>
+</template>
+
+<template id="done">
+  <div class="big-check"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg></div>
+  <h2>Atelier is installed</h2>
+  <p>One step before it opens the first time:</p>
+  <ol>
+    <li>Open <strong>Settings › General › VPN &amp; Device Management</strong>.</li>
+    <li>Tap your Apple ID, then <strong>Trust</strong>.</li>
+  </ol>
+  <p class="note">Then open Atelier from your Home Screen. <span data-part="handed">It opens signed in and already paired. </span>The installer has stopped, so you can close rootshell and this page.</p>
+</template>
+
+<template id="ended">
+  <h2>The installer has stopped</h2>
+  <p>You stopped it. You can close rootshell and this page.</p>
+  <!-- A run ends with its page: carrying on takes a new run, with a new
+       page. Shortcuts asks first, then runs it. -->
+  <a class="btn btn-primary" href="shortcuts://run-shortcut?name=Install%20Atelier">Run the Shortcut again</a>
+  <p class="note">It picks up where it left off.</p>
+</template>
+
+<template id="stopped">
+  <!-- What stopped it is the installer's. -->
+  <h2>The install stopped</h2>
+  <p data-field="what"></p>
+  <ul class="next" data-field="next"></ul>
+  <a class="btn btn-primary" href="shortcuts://run-shortcut?name=Install%20Atelier">Run the Shortcut again</a>
+  <p class="note">rootshell's terminal says the same, and atelier-install.log, in rootshell's folder, has the details.</p>
+</template>
+</body>
+</html>

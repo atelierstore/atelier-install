@@ -6,6 +6,7 @@ use std::fmt::Display;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -68,13 +69,23 @@ pub fn log(line: impl Display) {
     }
 }
 
-/// Posts `text` as a notification, where rootshell sends those (its
-/// Settings › General › Terminal Notifications), for a user who's in
-/// another app, as in Settings to pair: the terminal takes OSC 777 for one
-/// and prints nothing. rootshell shows it only from the background, which
-/// takes Location Diary, or for a tab that isn't on screen. Not in the log,
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// No notifications from here on: the page says it all, in front, and
+/// rootshell's would come over it.
+pub fn no_notifications() {
+    QUIET.store(true, Ordering::Relaxed);
+}
+
+/// Posts `text` as a notification: the terminal takes OSC 777 for one and
+/// prints nothing. rootshell posts it while it's behind another app, such
+/// as Settings, from 1.0.16-177 on; before, it kept it until it was in
+/// front again, and skipped it there. None with the page. Not in the log,
 /// as it can hold the pairing's code.
 pub fn notify(text: &str) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
     print!("\x1b]777;notify;Atelier;{text}\x07");
     let _ = io::stdout().flush();
 }
@@ -84,10 +95,14 @@ pub fn notify(text: &str) {
 pub fn step(number: u32, of: u32, title: &str) {
     println!();
     println!("[{number}/{of}] {title}");
-    let seconds = STARTED
+    log(format!("[{number}/{of}] {title} ({} s in)", seconds()));
+}
+
+/// The seconds since the log began, for the log.
+pub fn seconds() -> u64 {
+    STARTED
         .get()
-        .map_or(0, |started| started.elapsed().as_secs());
-    log(format!("[{number}/{of}] {title} ({seconds} s in)"));
+        .map_or(0, |started| started.elapsed().as_secs())
 }
 
 /// A line under a step.

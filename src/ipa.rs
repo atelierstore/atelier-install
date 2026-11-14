@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 
 use crate::blocking::run;
 use crate::handoff::HandOffs;
+use crate::page;
 use crate::state::{self, State};
 use crate::terminal::{self, Stop};
 
@@ -154,13 +155,15 @@ fn download(state: &State, link: &str) -> Result<PathBuf, Stop> {
         if megabytes != shown {
             shown = megabytes;
             match total {
-                Some(total) if total > 0 => terminal::bar(
-                    received as f64 / total as f64,
-                    format!("{megabytes} of {} MB", total.div_ceil(1 << 20)),
-                ),
+                Some(total) if total > 0 => {
+                    let of = format!("{megabytes} of {} MB", total.div_ceil(1 << 20));
+                    terminal::bar(received as f64 / total as f64, &of);
+                    page::bar(received as f64 / total as f64, of);
+                }
                 _ => terminal::progress(format!("Downloading: {megabytes} MB")),
             }
         }
+        page::tick();
     }
     terminal::done(format!("Downloaded {} MB.", received.div_ceil(1 << 20)));
     Ok(path)

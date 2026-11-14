@@ -4,10 +4,10 @@
 //! such as Atelier's pairing file, on a tunnel that runs without a task of
 //! its own (`tunnel.rs`).
 //!
-//! rootshell's sockets don't time out, so this neither waits for an answer
-//! nor looks for the pairing service port by port: a closed port can take
-//! as long as LocalDevVPN does to say so. It
-//! goes to the port the user gives, the one that worked last, or 49152.
+//! iOS picks the pairing service's port, and it can move after a restart.
+//! The program asks Bonjour where this iPhone offers it
+//! (`_remotepairing._tcp`), and otherwise goes to the port the user gives,
+//! the one that worked last, or 49152. It never tries port by port.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
@@ -35,6 +35,34 @@ pub const DEVICE: Ipv4Addr = Ipv4Addr::new(10, 7, 0, 1);
 pub const DEFAULT_PORT: u16 = 49152;
 /// The name the iPhone's logs give this host, as Atelier's.
 const LABEL: &str = "Atelier";
+/// The Bonjour service iOS's pairing service offers, and how long to look
+/// for it: Bonjour answers within a second or so on a Wi-Fi network.
+const SERVICE: &str = "_remotepairing._tcp";
+const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The port this iPhone's pairing service has now, from Bonjour: of the
+/// devices that offer it, the one at `wifi`, this iPhone's Wi-Fi address,
+/// or the only one when that isn't known. Why not, otherwise, for the log.
+pub fn find_port(wifi: Option<Ipv4Addr>) -> Result<u16, String> {
+    let services = net::bonjour(SERVICE, LOOK_FOR).map_err(|error| error.to_string())?;
+    pick(&services, wifi).ok_or_else(|| {
+        format!(
+            "{} device(s) offer it, none of them at this iPhone's Wi-Fi address",
+            services.len()
+        )
+    })
+}
+
+fn pick(services: &[net::Service], wifi: Option<Ipv4Addr>) -> Option<u16> {
+    match (wifi, services) {
+        (Some(wifi), _) => services
+            .iter()
+            .find(|service| service.addresses.contains(&IpAddr::V4(wifi)))
+            .map(|service| service.port),
+        (None, [only]) => Some(only.port),
+        (None, _) => None,
+    }
+}
 
 #[derive(Debug)]
 pub enum Problem {
@@ -184,5 +212,29 @@ impl Phone {
         run(giving).unwrap_or(Err(IdeviceError::UnexpectedResponse(
             "it waited for something rootshell's programs don't have, such as a timer".into(),
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picks_this_iphone_of_the_devices_bonjour_finds() {
+        let service = |port, address: &str| net::Service {
+            port,
+            addresses: vec![address.parse().unwrap(), "fe80::1".parse().unwrap()],
+        };
+        let found = [
+            service(62078, "192.168.1.30"),
+            service(49153, "192.168.1.20"),
+        ];
+        let wifi = Some(Ipv4Addr::new(192, 168, 1, 20));
+        assert_eq!(pick(&found, wifi), Some(49153));
+        assert_eq!(pick(&found, Some(Ipv4Addr::new(192, 168, 1, 99))), None);
+        // Without the Wi-Fi address, only when there's no telling which.
+        assert_eq!(pick(&found, None), None);
+        assert_eq!(pick(&found[1..], None), Some(49153));
+        assert_eq!(pick(&[], wifi), None);
     }
 }
