@@ -271,7 +271,10 @@ where
             PairableHost::new(RpPairingSocket::new_device(Blocking(stream)), info.clone());
         let outcome = blocking::run(host.accept(identity, |code| {
             code_shown.set(true);
-            show_code("Code for Settings", &code);
+            // A code chosen in advance was shown already, with the page.
+            if info.setup_code.is_none() {
+                show_code("Code for Settings", &code);
+            }
             async {}
         }));
         match outcome {

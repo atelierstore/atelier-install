@@ -7,19 +7,26 @@
 //! interface, the mobile data's too, and LocalDevVPN's while it's
 //! connected, which the page's Shortcut saves so the installer knows
 //! whether to ask for it.
+//!
+//! rootshell's `ifconfig` leaves out the line break after each
+//! `hwassist=` line, so the line after it follows on the same line: an
+//! interface's `inet`, after a tab, or the next interface's header
+//! (`…TSO_V6>utun0: flags=8051<…>`). Seen on an iPhone on 14 Nov 2026.
 
 use std::net::Ipv4Addr;
 
 /// The Wi-Fi's interface on an iPhone.
 const WIFI: &str = "en0";
-/// LocalDevVPN's end of its tunnel, where it takes the iPhone's services:
-/// its interface lists it as the other end (`inet 10.7.1.1 --> 10.7.0.1`).
-const LOCAL_DEV_VPN_PEER: &str = "10.7.0.1";
+/// LocalDevVPN's interface's address, which it lists as both ends
+/// (`inet 10.7.1.1 --> 10.7.1.1`, on an iPhone on 14 Nov 2026), and the
+/// end where it takes the iPhone's services, which another build may list.
+const LOCAL_DEV_VPN: [&str; 2] = ["10.7.1.1", "10.7.0.1"];
 
 /// The IPv4 address in `text`: `ifconfig`'s output, for the Wi-Fi when it
 /// lists several interfaces, or an address by itself. None when there's
 /// none to announce.
 pub fn find(text: &str) -> Option<Ipv4Addr> {
+    let text = &unglued(text);
     let sections = interfaces(text);
     let text = if sections.is_empty() {
         text
@@ -49,13 +56,48 @@ pub fn find(text: &str) -> Option<Ipv4Addr> {
 /// Whether `text`, `ifconfig`'s output, lists LocalDevVPN's tunnel: it was
 /// connected when the output was saved.
 pub fn local_dev_vpn(text: &str) -> bool {
-    interfaces(text).iter().any(|(name, lines)| {
+    interfaces(&unglued(text)).iter().any(|(name, lines)| {
         name.starts_with("utun")
             && lines.lines().any(|line| {
                 let mut words = line.split_whitespace();
-                words.next() == Some("inet") && words.any(|word| word == LOCAL_DEV_VPN_PEER)
+                words.next() == Some("inet") && words.any(|word| LOCAL_DEV_VPN.contains(&word))
             })
     })
+}
+
+/// `text` with the line breaks rootshell's `ifconfig` leaves out put back:
+/// before each tab that isn't at a line's start, and before each header
+/// that follows something else on its line.
+fn unglued(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 256);
+    let mut previous = '\n';
+    for (at, character) in text.char_indices() {
+        let starts_line = previous == '\n';
+        let glued_tab = character == '\t' && !starts_line;
+        let glued_header = !starts_line
+            && !name_character(previous)
+            && !previous.is_whitespace()
+            && header_at(&text[at..]);
+        if glued_tab || glued_header {
+            out.push('\n');
+        }
+        out.push(character);
+        previous = character;
+    }
+    out
+}
+
+/// Whether `text` starts with an interface's header: its name, such as
+/// en0 or pdp_ip0, then `: flags=`.
+fn header_at(text: &str) -> bool {
+    let name = text
+        .find(|character| !name_character(character))
+        .unwrap_or(text.len());
+    name > 0 && text[name..].starts_with(": flags=")
+}
+
+fn name_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
 }
 
 /// `ifconfig`'s interfaces, each with its own lines, header included, as a
@@ -166,10 +208,46 @@ mod tests {
         let cut = EVERY_INTERFACE.find("utun4:").unwrap();
         assert!(!local_dev_vpn(&EVERY_INTERFACE[..cut]));
         // Another VPN's tunnel isn't it.
-        let other = EVERY_INTERFACE.replace("10.7.0.1", "10.9.0.1");
+        let other = EVERY_INTERFACE.replace("10.7.1.1 --> 10.7.0.1", "10.9.1.1 --> 10.9.0.1");
         assert!(!local_dev_vpn(&other));
         // `ifconfig en0` alone can't tell.
         assert!(!local_dev_vpn("\tinet 192.168.1.20 netmask 0xffffff00\n"));
+    }
+
+    /// `ifconfig` as rootshell prints it on an iPhone, cut short, with its
+    /// addresses changed: no line break after `hwassist=`, and LocalDevVPN
+    /// with its own address at both ends.
+    const ROOTSHELLS: &str = "lo0: flags=8049<UP,LOOPBACK,RUNNING,MULTICAST> mtu 16384 index 1\n\
+        \toptions=1203<RXCSUM,TXCSUM,TXSTATUS,SW_TIMESTAMP>\n\
+        \thwassist=29000ff<CSUM_IP,CSUM_TCP,MULTIPAGES,TXSTATUS,SW_TIMESTAMP>\tinet 127.0.0.1 netmask 0xff000000\n\
+        \tinet6 ::1 prefixlen 128 \n\
+        pdp_ip0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1450 index 2\n\
+        \thwassist=703000<CSUM_PARTIAL,MULTIPAGES,TSO_V4,TSO_V6>\tinet 10.142.7.9 --> 10.142.7.9 netmask 0xffffffff\n\
+        ipsec2: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500 index 23\n\
+        \thwassist=703000<CSUM_PARTIAL,MULTIPAGES,TSO_V4,TSO_V6>utun0: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1380 index 14\n\
+        \tinet6 fe80::1%utun0 prefixlen 64 scopeid 0xe \n\
+        en0: flags=8863<UP,BROADCAST,SMART,RUNNING,SIMPLEX,MULTICAST> mtu 1500 index 16\n\
+        \toptions=400<CHANNEL_IO>\n\
+        \tinet6 fe80::2%en0 prefixlen 64 secured scopeid 0x10 \n\
+        \tinet 192.168.1.20 netmask 0xffffff00 broadcast 192.168.1.255\n\
+        utun5: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500 index 39\n\
+        \toptions=6460<TSO4,TSO6,CHANNEL_IO,PARTIAL_CSUM,ZEROINVERT_CSUM>\n\
+        \thwassist=703000<CSUM_PARTIAL,MULTIPAGES,TSO_V4,TSO_V6>\tinet 10.7.1.1 --> 10.7.1.1 netmask 0xffffffff\n\
+        \tnd6 options=201<PERFORMNUD,DAD>\n";
+
+    #[test]
+    fn rootshells_ifconfig_with_its_lines_run_together() {
+        assert_eq!(find(ROOTSHELLS), Some(Ipv4Addr::new(192, 168, 1, 20)));
+        assert!(local_dev_vpn(ROOTSHELLS));
+        let text = unglued(ROOTSHELLS);
+        let names: Vec<&str> = interfaces(&text).iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, ["lo0", "pdp_ip0", "ipsec2", "utun0", "en0", "utun5"]);
+        // Its Wi-Fi's inet after a hwassist line, too.
+        let glued = ROOTSHELLS.replace("\toptions=400<CHANNEL_IO>\n", "\thwassist=20000<VLAN_MTU>");
+        assert_eq!(find(&glued), Some(Ipv4Addr::new(192, 168, 1, 20)));
+        // Without LocalDevVPN's interface.
+        let cut = ROOTSHELLS.find("utun5:").unwrap();
+        assert!(!local_dev_vpn(&ROOTSHELLS[..cut]));
     }
 
     #[test]
