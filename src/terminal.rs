@@ -6,6 +6,7 @@ use std::fmt::Display;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufRead, Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
@@ -68,13 +69,23 @@ pub fn log(line: impl Display) {
     }
 }
 
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+/// No notifications from here on: the page says it all, in front, and
+/// rootshell's would come over it.
+pub fn no_notifications() {
+    QUIET.store(true, Ordering::Relaxed);
+}
+
 /// Posts `text` as a notification: the terminal takes OSC 777 for one and
-/// prints nothing. rootshell (92ded20) doesn't count a running .wasm program
-/// as a session, so behind another app it keeps the notification until it's
-/// in front again, where it skips it for the focused terminal: for now it
-/// only reaches a tab that isn't on screen. Not in the log, as it can hold
-/// the pairing's code.
+/// prints nothing. rootshell posts it while it's behind another app, such
+/// as Settings, from 1.0.16-177 on; before, it kept it until it was in
+/// front again, and skipped it there. None with the page. Not in the log,
+/// as it can hold the pairing's code.
 pub fn notify(text: &str) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
     print!("\x1b]777;notify;Atelier;{text}\x07");
     let _ = io::stdout().flush();
 }

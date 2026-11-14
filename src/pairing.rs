@@ -314,11 +314,9 @@ where
     )
 }
 
-/// Shows a code in the terminal, and as a notification. rootshell (92ded20)
-/// doesn't count a running .wasm program as a session, so it posts
-/// notifications only once it's in front again, where it skips them: the
-/// user reads the code in rootshell. The terminal takes OSC 777 for one and
-/// prints nothing.
+/// Shows a code in the terminal, and as a notification, which reaches the
+/// user in Settings (see `terminal::notify`). With the page, only in the
+/// terminal: the page shows it before Settings asks.
 fn show_code(what: &str, code: &str) {
     let code = spaced(code);
     println!("    {what}: {code}");

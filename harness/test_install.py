@@ -398,8 +398,10 @@ def page(address, closed):
         logged = log.read()
     check(key not in logged and f"the page: port {port}" in logged, "the log and the page's key")
     check(key in said, "the terminal didn't say where the page is")
+    check("\x1b]777;" not in said, f"it posted notifications over the page:\n{said!r}")
     print("ok  it asks for LocalDevVPN when ifconfig.txt doesn't list it, then stops at the tunnel and says why")
     print("ok  the page's key is in the terminal, never in the log")
+    print("ok  with the page, rootshell posts no notifications")
 
     # With the pairing kept and LocalDevVPN listed, it goes straight on.
     with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
