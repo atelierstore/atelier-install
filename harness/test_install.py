@@ -473,6 +473,25 @@ def page(address, closed):
     print("ok  with the pairing kept and LocalDevVPN listed, the page goes straight on")
     shutil.rmtree(folder)
 
+    # Stop the installer, from the page: it answers with the ended screen,
+    # then ends, and only with the key.
+    folder = tempfile.mkdtemp(prefix="atelier-install-stop-")
+    with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
+        ifconfig.write(IFCONFIG.format(address=address))
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed)
+    page = Page(port, key)
+    page.wait_for("pair", program)
+    check(page.ask("POST", "/stop", body=b"")[0] == 403, "a stop without the key", program)
+    status, body = page.ask("POST", "/stop", body=b"", headers={"X-Atelier-Key": key})
+    check(status == 200 and json.loads(body)["view"]["screen"] == "ended",
+          f"the stop's answer: {status} {body!r}", program)
+    status, said = program.end()
+    check(status == 0 and "Stopped from the page" in said,
+          f"after the page's stop, it said ({status}):\n{said}")
+    print("ok  the page's Stop ends the installer, after answering with the ended screen")
+    shutil.rmtree(folder)
+
 
 if __name__ == "__main__":
     main()

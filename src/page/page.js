@@ -8,6 +8,7 @@
   const card = document.getElementById("card");
   const stepper = document.getElementById("stepper").children;
   const lost = document.getElementById("lost");
+  const stop = document.getElementById("stop");
 
   /** How often to ask, and how long without an answer before saying so. */
   const EVERY_MS = 800;
@@ -32,7 +33,8 @@
       .then((state) => {
         failingSince = 0;
         lost.hidden = true;
-        if (!shown || state.seq !== shown.seq) show(state);
+        // Once it's over, a late answer from before doesn't bring a screen back.
+        if (!over && (!shown || state.seq !== shown.seq)) show(state);
       })
       .catch(() => {
         if (!failingSince) failingSince = Date.now();
@@ -61,7 +63,8 @@
     }
     shown = state;
     sending = false;
-    if (view.screen === "done" || view.screen === "stopped") over = true;
+    if (view.screen === "done" || view.screen === "stopped" || view.screen === "ended") over = true;
+    stop.hidden = over;
   }
 
   function build(view, asking, again) {
@@ -257,6 +260,36 @@
         if (shown && shown.seq === seq) again();
       });
   }
+
+  // Stop the installer: asks first, in place. The installer answers with
+  // the ended screen, then ends.
+  const asking = stop.querySelector('[data-stop-part="ask"]');
+  const link = stop.querySelector('[data-stop="ask"]');
+  const toggle = (open) => {
+    asking.hidden = !open;
+    link.hidden = open;
+  };
+  link.addEventListener("click", () => toggle(true));
+  stop.querySelector('[data-stop="keep"]').addEventListener("click", () => toggle(false));
+  const confirm = stop.querySelector('[data-stop="stop"]');
+  confirm.addEventListener("click", () => {
+    if (confirm.disabled) return;
+    confirm.disabled = true;
+    confirm.classList.add("working");
+    fetch("/stop", { method: "POST", headers: { "X-Atelier-Key": key }, cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`status ${response.status}`);
+        return response.json();
+      })
+      .then((state) => {
+        lost.hidden = true;
+        show(state);
+      })
+      .catch(() => {
+        confirm.disabled = false;
+        confirm.classList.remove("working");
+      });
+  });
 
   poll();
 })();

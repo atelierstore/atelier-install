@@ -136,6 +136,8 @@ pub enum View {
     Done { handed: bool },
     /// Why the program stopped, and what to do.
     Stopped { what: String, next: Vec<String> },
+    /// Stopped from the page, by its Stop the installer.
+    Ended,
 }
 
 impl View {
@@ -147,7 +149,7 @@ impl View {
             View::SignIn { .. } | View::Code { .. } => Some(1),
             View::Review { .. } | View::Installing { .. } => Some(2),
             View::Done { .. } => Some(3),
-            View::Busy { .. } | View::Question { .. } | View::Stopped { .. } => None,
+            View::Busy { .. } | View::Question { .. } | View::Stopped { .. } | View::Ended => None,
         }
     }
 
@@ -202,6 +204,21 @@ impl Answer {
             .and_then(|pick| usize::try_from(pick).ok())
     }
 }
+
+/// Ends the program as Control-C does, once the page has its answer: what
+/// each step made is kept for the next run, which picks up there.
+#[cfg(not(test))]
+fn end_from_page() -> ! {
+    terminal::log("the page: stopped from the page");
+    println!();
+    println!("Stopped from the page. The next run picks up where this one left off.");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    std::process::exit(0)
+}
+
+/// The tests stay in their process: they look at `ending`.
+#[cfg(test)]
+fn end_from_page() {}
 
 thread_local! {
     static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
@@ -367,6 +384,9 @@ struct Page {
     failed: bool,
     /// Whether the page has asked for the state with the key yet.
     visited: bool,
+    /// Whether the page asked the program to stop, which it does once it
+    /// has answered.
+    ending: bool,
 }
 
 impl Page {
@@ -387,6 +407,7 @@ impl Page {
             served: Instant::now(),
             failed: false,
             visited: false,
+            ending: false,
         })
     }
 
@@ -469,6 +490,10 @@ impl Page {
             ),
         };
         let _ = visitor.write_all(&reply);
+        drop(visitor);
+        if self.ending {
+            end_from_page();
+        }
     }
 
     fn reply(&mut self, request: &Request) -> Vec<u8> {
@@ -492,7 +517,7 @@ impl Page {
             ("GET", "/page.js") => file("text/javascript; charset=utf-8", SCRIPT),
             ("GET", "/icon.png") => file("image/png", ICON),
             ("GET", "/display.woff2") => file("font/woff2", FONT),
-            ("GET", "/state") | ("POST", "/answer") if !keyed => {
+            ("GET", "/state") | ("POST", "/answer") | ("POST", "/stop") if !keyed => {
                 http::answer("403 Forbidden", TEXT, b"Only the page asks this.\n")
             }
             ("GET", "/state") => {
@@ -516,6 +541,17 @@ impl Page {
             ("POST", "/answer") => {
                 let taken = self.take(&request.body);
                 file(JSON, json!({ "taken": taken }).to_string().as_bytes())
+            }
+            ("POST", "/stop") => {
+                // Once it's done or stopped, there's nothing left to stop.
+                if !matches!(
+                    self.view,
+                    View::Done { .. } | View::Stopped { .. } | View::Ended
+                ) {
+                    self.set(View::Ended, false);
+                    self.ending = true;
+                }
+                file(JSON, &self.state())
             }
             _ => http::answer("404 Not Found", TEXT, b"Nothing here.\n"),
         }
@@ -584,6 +620,7 @@ mod tests {
             served: Instant::now(),
             failed: false,
             visited: false,
+            ending: false,
         }
     }
 
@@ -720,6 +757,44 @@ mod tests {
         assert_eq!(taken.text("password"), "secret");
         assert_eq!(taken.text("code"), "");
         assert!(!taken.yes());
+    }
+
+    #[test]
+    fn stops_when_the_page_asks_with_the_key() {
+        let mut page = page();
+        page.set(
+            View::Pair {
+                code: "123456".into(),
+                problem: None,
+            },
+            false,
+        );
+        let stop = |port: u16, key: &str| {
+            format!(
+                "POST /stop HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Atelier-Key: {key}\r\nContent-Length: 0\r\n\r\n"
+            )
+        };
+        let port = page.port;
+        assert_eq!(
+            exchange(&mut page, &stop(port, "123456789123456789123456780")).0,
+            "HTTP/1.1 403 Forbidden"
+        );
+        assert!(!page.ending);
+        let (status, body) = exchange(&mut page, &stop(port, KEY));
+        assert_eq!(status, "HTTP/1.1 200 OK");
+        let state: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(state["view"]["screen"], "ended");
+        assert_eq!(state["asking"], false);
+        assert!(page.ending);
+
+        // Done is done: nothing to stop.
+        let mut page = super::tests::page();
+        page.set(View::Done { handed: true }, false);
+        let port = page.port;
+        let (_, body) = exchange(&mut page, &stop(port, KEY));
+        let state: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(state["view"]["screen"], "done");
+        assert!(!page.ending);
     }
 
     #[test]

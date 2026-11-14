@@ -2,7 +2,9 @@
 <!--
   The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs).
   The screens' wording is the mockup Alex approved on 13 Nov 2026
-  (pair, sign-in, code, review, installing, done). The others (busy,
+  (pair, sign-in, code, review, installing, done), with Stop and its
+  ended screen, and the done screen's last line, from the one-page
+  journey's mockup of 14 Nov. The others (busy,
   question, stopped, and the lines marked "not drawn yet") wait for a
   mockup of their own.
 -->
@@ -22,6 +24,19 @@
   <ol class="stepper" id="stepper"><li>Pair</li><li>Sign in</li><li>Install</li></ol>
   <p class="lost" id="lost" hidden>The installer isn't answering. If it stays this way, open rootshell: its terminal says why.</p>
   <div class="card" id="card"><p class="wait">Waiting for the installer</p></div>
+  <!-- Until it's installed or stopped: asks first, in place, then ends the
+       installer as Control-C does. -->
+  <div class="stop" id="stop" hidden>
+    <button type="button" class="stop-link" data-stop="ask">Stop the installer</button>
+    <div class="stop-ask" data-stop-part="ask" hidden>
+      <strong>Stop the installer?</strong>
+      <p>Next time, it picks up where it left off.</p>
+      <div class="stop-row">
+        <button type="button" class="btn btn-secondary" data-stop="keep">Keep going</button>
+        <button type="button" class="btn btn-primary" data-stop="stop">Stop</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <template id="no-key">
@@ -130,7 +145,13 @@
     <li>Open <strong>Settings › General › VPN &amp; Device Management</strong>.</li>
     <li>Tap your Apple ID, then <strong>Trust</strong>.</li>
   </ol>
-  <p class="note">Then tap Done at the top, and open Atelier from your Home Screen. <span data-part="handed">It opens signed in and already paired. </span>The installer has stopped, so you can close rootshell.</p>
+  <p class="note">Then open Atelier from your Home Screen. <span data-part="handed">It opens signed in and already paired. </span>The installer has stopped, so you can close rootshell and this page.</p>
+</template>
+
+<template id="ended">
+  <h2>The installer has stopped</h2>
+  <p>You stopped it. You can close rootshell and this page.</p>
+  <p class="note">To carry on, run the Shortcut again. It picks up where it left off.</p>
 </template>
 
 <template id="stopped">
