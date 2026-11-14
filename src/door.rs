@@ -16,8 +16,9 @@
 //! and hands that accept the listener's first connection, which is lost: a
 //! knock that comes back says the ones before it won't.
 //!
-//! A connection that sends nothing holds the program up until it closes,
-//! as there's no time limit on a receive. Safari opened none in that test.
+//! A connection that sends nothing holds the program up for [`FIRST_WAIT`]
+//! at most: each read waits that long, then gives up, with rootshell's
+//! receive time limit (1.0.16-177). Safari opened none in that test.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -35,6 +36,10 @@ const FIRST_KNOCKS: u32 = 4;
 const QUEUE: i32 = 16;
 /// The most of a connection's first bytes read to tell a knock.
 const FIRST_READ: usize = 4096;
+/// How long a read on a connection that came waits for something to come:
+/// a knock, a browser's request and the iPhone's first words all come at
+/// once.
+pub const FIRST_WAIT: Duration = Duration::from_secs(2);
 
 pub struct Door {
     listener: Listener,
@@ -56,6 +61,20 @@ pub struct Visitor {
     stream: Stream,
     first: Vec<u8>,
     at: usize,
+}
+
+impl Visitor {
+    /// How long its reads wait, [`FIRST_WAIT`] until this: None for however
+    /// long, as the iPhone's pairing waits for the person in Settings.
+    pub fn set_read_limit(&self, limit: Option<Duration>) -> io::Result<()> {
+        self.stream.set_read_limit(limit)
+    }
+
+    /// Whether it closed, or said nothing in time, before it was handed
+    /// over.
+    pub fn said_nothing(&self) -> bool {
+        self.first.is_empty()
+    }
 }
 
 impl Read for Visitor {
@@ -170,8 +189,10 @@ impl Door {
     fn accept(&mut self, waiting: bool) -> io::Result<Option<Visitor>> {
         loop {
             let mut stream = self.listener.accept()?;
+            stream.set_read_limit(Some(FIRST_WAIT))?;
             let mut first = vec![0u8; FIRST_READ];
-            // A connection that breaks is one that closed.
+            // A connection that breaks is one that closed, and one that
+            // says nothing in time says nothing.
             let mut got = stream.read(&mut first).unwrap_or(0);
             // A knock, if it's that, may come in pieces.
             while got > 0 && got < KNOCK && first[..got.min(WORD)] == self.word[..got.min(WORD)] {
@@ -301,6 +322,20 @@ pub(crate) mod tests {
         assert_eq!(&read, b"hello");
         assert!(door.ours.is_empty());
         drop(browser);
+    }
+
+    #[test]
+    fn a_connection_that_says_nothing_holds_it_up_for_a_while_only() {
+        let (mut door, port) = opened();
+        let silent = Stream::connect(Ipv4Addr::LOCALHOST, port).unwrap();
+        let started = std::time::Instant::now();
+        let mut quiet = door.next().unwrap().expect("the silent connection");
+        assert!(started.elapsed() < FIRST_WAIT * 2);
+        assert!(quiet.said_nothing());
+        let mut nothing = [0u8; 1];
+        assert!(quiet.read(&mut nothing).is_err());
+        drop((quiet, silent));
+        assert!(door.next().unwrap().is_none());
     }
 
     #[test]

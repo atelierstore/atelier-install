@@ -420,6 +420,12 @@ impl Page {
     }
 
     fn serve(&mut self, mut visitor: Visitor) {
+        // It had its time (door::FIRST_WAIT), as a connection Safari
+        // opens ahead of a request can take.
+        if visitor.said_nothing() {
+            terminal::log("the page: a connection said nothing in time");
+            return;
+        }
         let reply = match http::read(&mut visitor) {
             Ok(request) => self.reply(&request),
             Err(Nothing::Silent | Nothing::CutShort) => return,

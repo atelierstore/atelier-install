@@ -247,6 +247,8 @@ fn next_on_page(door: &mut Door) -> io::Result<crate::door::Visitor> {
     loop {
         page::tick();
         if let Some(visitor) = door.next()? {
+            // Pair-setup waits for the code typed in Settings.
+            visitor.set_read_limit(None)?;
             return Ok(visitor);
         }
         std::thread::sleep(LOOK_EVERY);

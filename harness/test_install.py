@@ -76,11 +76,11 @@ def closed_port():
 class Program:
     """atelier-install.wasm in rootshell.py, and what it has printed."""
 
-    def __init__(self, folder, *arguments, mdns_port=None):
+    def __init__(self, folder, *arguments, mdns_port=None, rootshell=()):
         mdns = ["--mdns", f"127.0.0.1:{mdns_port}"] if mdns_port else []
         self.process = subprocess.Popen(
             [sys.executable, os.path.join(HERE, "rootshell.py"), "--dir", folder,
-             *mdns, "--device", "127.0.0.1", WASM, *arguments],
+             *mdns, "--device", "127.0.0.1", *rootshell, WASM, *arguments],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         self.lines = queue.Queue()
@@ -118,9 +118,9 @@ class Program:
         return status, "".join(self.printed)
 
 
-def run(folder, *arguments, typed=""):
+def run(folder, *arguments, typed="", rootshell=()):
     """A run to its end, with what's typed: its exit code and output."""
-    program = Program(folder, *arguments)
+    program = Program(folder, *arguments, rootshell=rootshell)
     program.process.stdin.write(typed)
     program.process.stdin.close()
     return program.end()
@@ -136,6 +136,13 @@ def fail(why, program=None):
 def check(condition, why, program=None):
     if not condition:
         fail(why, program)
+
+
+def bonjour(*devices):
+    """rootshell.py's options for the devices that offer the iPhone's
+    pairing service, as (port, addresses)."""
+    return [option for port, addresses in devices
+            for option in ("--bonjour", f"_remotepairing._tcp={port}@{addresses}")]
 
 
 def main():
@@ -208,6 +215,30 @@ def main():
     check(status == 1 and "Using the pairing kept from the last run" in said
           and "Pair with Atelier" not in said, f"the second run said ({status}):\n{said}")
     print("ok  a second run uses the kept pairing")
+
+    # Without --port, where Bonjour finds this iPhone's pairing service:
+    # of the devices that offer it, the one at its Wi-Fi address.
+    status, said = run(folder, "--check", rootshell=bonjour(
+        (closed_port(), "192.0.2.7"), (port, f"{address},fe80::1c2b:3a4d:5e6f:7081%en0")))
+    with open(os.path.join(folder, "atelier-install.log")) as log:
+        logged = log.read()
+    check(status == 1 and f"pairing service didn't answer at port {port}" in said
+          and f"Bonjour: the pairing service is at port {port}" in logged,
+          f"without --port, it said ({status}):\n{said}")
+    print("ok  without --port, it goes where Bonjour finds this iPhone's pairing service")
+
+    # On a rootshell before 177, it starts all the same, says why it can't
+    # ask Bonjour, and goes to the port that worked last, or 49152.
+    elsewhere = closed_port()
+    status, said = run(folder, "--check", rootshell=("--before-177", *bonjour((elsewhere, address))))
+    with open(os.path.join(folder, "atelier-install.log")) as log:
+        logged = log.read()
+    went = re.search(r"pairing service didn't answer at port (\d+)", said)
+    check(status == 1 and went and int(went.group(1)) != elsewhere
+          and "unhandled env.rootshell_socket_set_recv_timeout" in said
+          and "older than 1.0.16-177" in said and "rootshell: older than 1.0.16-177" in logged,
+          f"before rootshell 177, it said ({status}):\n{said}")
+    print("ok  on a rootshell before 1.0.16-177, it starts, says so, and goes without Bonjour")
 
     # An install a run signed and didn't finish waits for the next run,
     # whatever stops this one: its record, its sign-in and its signed app.
@@ -365,6 +396,15 @@ def page(address, closed):
           "the page under another name", program)
     print("ok  the page answers only with its key, and only under its own name")
 
+    # A connection that says nothing holds it up for a moment only.
+    silent = socket.create_connection(("127.0.0.1", port))
+    started = time.monotonic()
+    check(page.ask("GET", "/state", headers={"X-Atelier-Key": key})[0] == 200
+          and time.monotonic() - started < 10,
+          "the page behind a connection that says nothing", program)
+    silent.close()
+    print("ok  a connection to the page that says nothing doesn't hold it up")
+
     # The code shows before the phone connects; the phone pairs on it.
     state = page.wait_for("pair", program)
     code = state["view"]["code"]
@@ -403,17 +443,20 @@ def page(address, closed):
     print("ok  the page's key is in the terminal, never in the log")
     print("ok  with the page, rootshell posts no notifications")
 
-    # With the pairing kept and LocalDevVPN listed, it goes straight on.
+    # With the pairing kept and LocalDevVPN listed, it goes straight on, to
+    # the port Bonjour gives, as the Shortcut gives none.
     with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
         ifconfig.write(IFCONFIG.format(address=address) + LOCAL_DEV_VPN)
     port = random.randint(20000, 29999)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}",
+                      rootshell=bonjour((closed, address)))
     page = Page(port, key)
     seen = []
     state = page.wait_for("stopped", program, seen)
     check("pair" not in seen and "question" not in seen, f"the page showed {seen}", program)
     status, said = program.end()
-    check(status == 1 and "LocalDevVPN was connected when the Shortcut started" in said,
+    check(status == 1 and "LocalDevVPN was connected when the Shortcut started" in said
+          and f"pairing service didn't answer at port {closed}" in said,
           f"the second run with the page said ({status}):\n{said}")
     print("ok  with the pairing kept and LocalDevVPN listed, the page goes straight on")
     shutil.rmtree(folder)

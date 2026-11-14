@@ -223,6 +223,15 @@ fn main() -> ExitCode {
         }
         terminal::start_log(&state::files_folder().join(LOG));
         terminal::log(format!("atelier-install {}", env!("CARGO_PKG_VERSION")));
+        if net::has_177_calls() {
+            terminal::log("rootshell: 1.0.16-177 or later");
+        } else {
+            // Right under its runtime's "unhandled env." line, which this
+            // explains.
+            terminal::log("rootshell: older than 1.0.16-177");
+            terminal::say("This rootshell is older than 1.0.16-177, so the installer can't ask");
+            terminal::say("Bonjour where the iPhone's pairing service is.");
+        }
         prepare(&state);
         if let Some(address) = &options.page {
             page::start(address)?;
@@ -320,7 +329,7 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
         })
     };
     connecting();
-    let port = options.port.or(state.port()).unwrap_or(phone::DEFAULT_PORT);
+    let port = options.port.unwrap_or_else(|| pairing_port(state));
     let phone = match reach(&mut pairing, port) {
         // A pairing the iPhone has forgotten, as when it's been reset, or
         // the pairing program's from before that.
@@ -1025,6 +1034,24 @@ fn reach(pairing: &mut Pairing, port: u16) -> Result<phone::Phone, phone::Proble
     terminal::say("If nothing more shows within a minute, press Control-C: LocalDevVPN");
     terminal::say("isn't connected, or the pairing service is at another port.");
     phone::connect(&mut pairing.file, port)
+}
+
+/// Where the iPhone's pairing service is: where Bonjour finds it, or else
+/// at the port that last worked, or iOS's usual one.
+fn pairing_port(state: &State) -> u16 {
+    let wifi = fs::read_to_string(state::files_folder().join(pairing::IFCONFIG_FILE))
+        .ok()
+        .and_then(|text| address::find(&text));
+    match phone::find_port(wifi) {
+        Ok(port) => {
+            terminal::log(format!("Bonjour: the pairing service is at port {port}"));
+            port
+        }
+        Err(why) => {
+            terminal::log(format!("Bonjour: {why}"));
+            state.port().unwrap_or(phone::DEFAULT_PORT)
+        }
+    }
 }
 
 /// What to do when the tunnel didn't open. `paired_now` when the pairing

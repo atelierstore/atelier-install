@@ -35,7 +35,7 @@ Every step runs in one App Store app, as one program. There's no computer at any
    - It sends the response three times to 224.0.0.251:5353, with a 75-minute TTL.
    - When the iPhone connects, idevice's `PairableHost` runs pair-setup: SRP with the code, then the exchange of Ed25519 identities. The result is an RPPairing file, which the program keeps.
 2. **The tunnel** (`src/phone.rs`, `src/tunnel.rs`).
-   - The program connects to iOS's RemotePairing service at 10.7.0.1 through LocalDevVPN, on port 49152 or the port that worked last.
+   - The program asks Bonjour where this iPhone offers iOS's RemotePairing service (`_remotepairing._tcp`), picking the device at the iPhone's Wi-Fi address, and connects to that port at 10.7.0.1 through LocalDevVPN. When Bonjour doesn't find it, or rootshell is older than 1.0.16-177, which can't ask, it tries the port that worked last, or 49152.
    - It pair-verifies with the RPPairing file, asks the iPhone for a tunnel listener, connects to it, and runs the TLS-PSK handshake that opens a CDTunnel, which carries IP packets.
    - Over the CDTunnel, a userspace TCP stack (jktcp) reaches RemoteServiceDiscovery, which lists the iPhone's services: lockdownd for its name and UDID, AFC, installation_proxy and house_arrest.
 3. **The IPA** (`src/ipa.rs`, `src/source.rs`). It comes from rootshell's folder, a path or an HTTPS link, and is checked against its SHA-256 when you give one. With `--page`, it's Atelier's newest release, from Atelier's source. Its Info.plist gives the bundle ID, the name, the version, and what the app takes.
@@ -60,11 +60,12 @@ With `--page`, the program also serves its page (`src/page.rs`, `src/page/`) at 
 - **Reads that fit rootshell's 64 KB slot.** rootshell hands back what a read brought through one 64 KB slot, as base64 in JSON, and fails a read that doesn't fit with EINVAL. The program defines its own `read`, `readv`, `write` and `writev`, which std and every crate link to in place of wasi-libc's. Reads ask for 32 KB at most, and writes go in pieces of 256 KB (`src/chunks.rs`, `src/net.rs`).
 - **POSIX errors in place of FileManager's.** rootshell's file broker answers EIO for any folder creation, rename or delete it can't do. The program's own versions of those calls look at what's there and answer EEXIST or ENOENT, as std expects (`src/paths.rs`).
 - **Check-ins.** rootshell runs its programs in a web view that isn't in any window, and WebKit can suspend such a view's work (`WKPreferences.inactiveSchedulingPolicy`). On an iPhone, a computation that asked rootshell nothing, hashing a 38 MB binary, stopped until a key was pressed. So at most every 50 ms, the program makes a call to rootshell that changes nothing (`fd_prestat_get`). It does so from the signing's hashing, through a patched copy of apple-codesign-quick, from the download, from the install, and from every 64th allocation (`src/awake.rs`).
+- **Calls an older rootshell doesn't have.** rootshell 1.0.16-177 added a receive's time limit and a Bonjour lookup. A program that imports a `rootshell_socket` call its rootshell doesn't have can't start. But rootshell offers every call under `env` too, and fills in an `env` call it doesn't have with one that answers 0. So the program imports those two from `env`, and asks once, at the start, for a time limit on a socket that doesn't exist: 1.0.16-177 answers EBADF, an older rootshell 0. On an older one, the program goes without them, and rootshell notes the stand-in on stderr once, as "unhandled env.rootshell_socket_set_recv_timeout" (`src/net.rs`).
 - **Connections that never time out.** Network.framework keeps a connection waiting for a server that doesn't answer. So the program notes what it's waiting for, and the run after a Control-C tries that server last. It also goes straight to ports it knows instead of scanning for one.
 - **The same machine to Apple.** The anisette state is kept for each server, and handed to the app along with the sign-in, so Apple doesn't ask for a code again.
 - **Knocking on its own port.** rootshell's `accept` waits until a connection comes, and there's no poll. So to see whether the page or the iPhone is waiting, the program connects to its own port and sends a random word, a knock. `accept` then returns at once: with a connection that came before the knock, or with the knock itself, which means nobody was waiting (`src/door.rs`). The program numbers its knocks, because rootshell gives a stopped program's leftover `accept` the next program's first connection.
 - **The pairing's code, chosen in advance.** idevice's pairing host makes the code only once Settings has started pairing. Its copy here takes a code chosen beforehand (`vendor/idevice`), so the page can show the code before you go to Settings.
-- **Staying alive in Settings.** rootshell's Location Diary Mode keeps it running in the background while you type the code in Settings. It has to be Session Only: Auto During Active Sessions doesn't count a WebAssembly program as a session, so it stays off while the program runs. rootshell doesn't show the program's notifications (OSC 777) from the background, for the same reason: it keeps them until it's in front again, where it skips them. So the pairing's code is read in rootshell itself.
+- **Staying alive in Settings.** rootshell's Location Diary Mode keeps it running in the background while you type the code in Settings. Before rootshell 1.0.16-177, it has to be Session Only: Auto During Active Sessions didn't count a WebAssembly program as a session, so it stayed off while the program ran. For the same reason, rootshell kept the program's notifications (OSC 777) until it was in front again, where it skipped them, so the pairing's code is read in rootshell itself. From 1.0.16-177 on, Auto counts the program, and its notifications show in Settings. With `--page`, the program posts none: the page shows the code, and notifications would come over it.
 
 ## Using it
 
@@ -73,7 +74,7 @@ You need:
 - iOS 27 or later, with Developer Mode on (Settings › Privacy & Security › Developer Mode).
 - Wi-Fi. iOS refuses LocalDevVPN's connections to its services over mobile data.
 - LocalDevVPN, from the App Store.
-- rootshell, from the App Store, with Location Diary Mode on and set to Session Only, in its Settings › General. Session Only goes off when rootshell closes, so turn it on again before a later run.
+- rootshell, from the App Store, with Location Diary Mode on, in its Settings › General. Before rootshell 1.0.16-177, set it to Session Only, which goes off when rootshell closes, so turn it on again before a later run. From 1.0.16-177 on, Auto During Active Sessions does, and stays set. 1.0.16-177 also lets the program find the pairing service's port by itself.
 - An Apple ID. With a free one, apps open for 7 days.
 
 In rootshell, run this line:
@@ -98,7 +99,7 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
 
   --sha256 <hex>      the IPA's SHA-256, to check it against
   --address <ip>      this iPhone's Wi-Fi address, for pairing, in place of ifconfig.txt
-  --port <number>     the iPhone's pairing service's port, when it isn't 49152
+  --port <number>     the iPhone's pairing service's port, when Bonjour doesn't find it
   --anisette <link>   your own anisette server, in place of Atelier's list
   --pairing-to <path> where the app takes this iPhone's pairing, in its container,
                       when its Info.plist doesn't say (it's asked)
@@ -112,7 +113,7 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
 
 **A run that stops picks up where it left off.** What each step makes is kept until the install is done. That covers the download and, from the signing on, the signed app and what the app takes. A run for the same IPA, by its link or its SHA-256, goes straight to the install. If the install's connection breaks, which can happen while rootshell isn't on screen, the program asks to try again. Everything kept goes once the app is installed, a day after the signing, with `--redo`, or with `--forget`. If nothing more shows within a minute, a server isn't answering. Press Control-C and run it again, and it tries that server last.
 
-**If step 2 shows nothing for a minute** while LocalDevVPN is connected, the iPhone's pairing service has likely moved to another port, which can happen after a restart. Press Control-C. A Bonjour browser on the iPhone, such as Discovery – DNS-SD Browser, shows the port under `_remotepairing._tcp`. Run the program again with `--port` and that number. It keeps the port for later runs.
+**If step 2 says the pairing service didn't answer, or shows nothing for a minute**, while LocalDevVPN is connected and Developer Mode is on, the iPhone's pairing service has likely moved to another port, as it can after a restart. From rootshell 1.0.16-177 on, the program asks Bonjour for it, so check that rootshell may look on the local network, in Settings › Privacy & Security › Local Network. Before 1.0.16-177, press Control-C first. Or find the port yourself: a Bonjour browser on the iPhone, such as Discovery – DNS-SD Browser, shows it under `_remotepairing._tcp`. Run the program again with `--port` and that number. It keeps the port for later runs.
 
 ## Your Apple ID
 

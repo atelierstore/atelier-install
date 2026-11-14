@@ -11,12 +11,17 @@ refused connection, a read that fails when what it brings doesn't fit
 rootshell's 64 KB reply slot, from a connection or a file, folders, renames
 and deletes that fail as rootshell's FileManager makes them fail, and none
 of the calls rootshell's runtime doesn't have (getsockname among them), so
-a program that leans on one fails here as it would there. Its folder is
-`/`, as rootshell's is, and its terminal calls (`rootshell_terminal_*`) are
-there too.
+a program that leans on one fails here as it would there. It has the calls
+rootshell 1.0.16-177 added: a receive's time limit, and a Bonjour lookup
+that finds what --bonjour says. Its folder is `/`, as rootshell's is, and
+its terminal calls (`rootshell_terminal_*`) are there too. As in rootshell,
+every one of those calls is also under `env`, and an `env` call it doesn't
+have answers 0, saying so once on stderr.
 
     rootshell.py [--dir FOLDER] [--mdns HOST:PORT] [--device HOST]
-        [--host NAME=HOST:PORT ...] [--ca FILE] program.wasm [arguments]
+        [--host NAME=HOST:PORT ...] [--ca FILE]
+        [--bonjour TYPE=PORT@ADDRESS,ADDRESS ...] [--before-177]
+        program.wasm [arguments]
 
 --dir is the folder the program sees as rootshell's (default: the current
 one). --mdns sends what the program multicasts to 224.0.0.251:5353 to
@@ -24,7 +29,10 @@ HOST:PORT instead, where a test can read it. --device connects what the
 program connects to 10.7.0.1, the iPhone through LocalDevVPN, to HOST
 instead. --host connects what the program connects to by the name NAME to
 HOST:PORT instead, with TLS still checked against NAME; --ca is the
-certificate authority TLS trusts in place of the system's.
+certificate authority TLS trusts in place of the system's. --bonjour is a
+device that offers the Bonjour service TYPE at PORT, at those addresses;
+a lookup of a type no --bonjour names finds nothing. --before-177 is
+rootshell as it was before 1.0.16-177, without those two calls.
 
 Needs `pip install wasmtime`.
 """
@@ -40,6 +48,7 @@ import wasmtime
 
 EBADF, EINVAL, EIO, EADDRINUSE = 8, 28, 29, 1
 ECONNREFUSED, ENETUNREACH, ETIMEDOUT = 14, 50, 73
+EAGAIN, ENOBUFS = 6, 42
 AF_INET, SOCK_STREAM, SOCK_DGRAM = 2, 1, 2
 MDNS = ("224.0.0.251", 5353)
 DEVICE = "10.7.0.1"
@@ -136,13 +145,14 @@ def pending(sock, length):
 class Sockets:
     """rootshell's socket broker, on the system's sockets."""
 
-    def __init__(self, mdns_to, device=None, hosts=None, ca=None):
+    def __init__(self, mdns_to, device=None, hosts=None, ca=None, bonjour=None):
         self.handles = {}
         self.next_fd = 100
         self.mdns_to = mdns_to
         self.device = device
         self.hosts = hosts or {}
         self.tls = ssl.create_default_context(cafile=ca)
+        self.bonjour = bonjour or {}
 
     def add(self, handle):
         fd = self.next_fd
@@ -266,10 +276,16 @@ class Sockets:
         handle = self.handles.get(fd)
         if handle is None or handle["sock"] is None:
             return EBADF
+        sock = handle["sock"]
+        sock.settimeout(handle.get("timeout"))
         try:
-            data = pending(handle["sock"], length)
+            data = pending(sock, length)
+        except TimeoutError:
+            return EAGAIN
         except OSError:
             return EIO
+        finally:
+            sock.settimeout(None)
         if not fits(len(data)):
             return EINVAL
         mem.write(buf, data)
@@ -292,6 +308,32 @@ class Sockets:
         except OSError:
             return EIO
         mem.u32(sent_out, length)
+        return 0
+
+    def set_recv_timeout(self, mem, fd, timeout_ms):
+        """How long a receive waits before it fails with EAGAIN: 0 for
+        however long."""
+        handle = self.handles.get(fd)
+        if handle is None:
+            return EBADF
+        handle["timeout"] = (timeout_ms & 0xFFFFFFFF) / 1000 or None
+        return 0
+
+    def bonjour_lookup(self, mem, kind, kind_len, _timeout_ms, out, out_max, out_len):
+        """rootshell's lines, "name\\thost\\tport\\taddress,…", whole ones
+        only, for the devices --bonjour gives the service."""
+        lines = self.bonjour.get(mem.read(kind, kind_len).decode(), [])
+        if not lines:
+            return ETIMEDOUT
+        answer = b""
+        for line in lines:
+            if len(answer) + len(line) > out_max:
+                break
+            answer += line
+        if not answer:
+            return ENOBUFS
+        mem.write(out, answer)
+        mem.u32(out_len, len(answer))
         return 0
 
     def close(self, mem, fd):
@@ -365,6 +407,8 @@ def main():
     parser.add_argument("--device")
     parser.add_argument("--host", action="append", default=[])
     parser.add_argument("--ca")
+    parser.add_argument("--bonjour", action="append", default=[])
+    parser.add_argument("--before-177", action="store_true")
     parser.add_argument("program")
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -378,7 +422,13 @@ def main():
         name, to = entry.split("=", 1)
         host, port = to.rsplit(":", 1)
         hosts[name] = (host, int(port))
-    sockets = Sockets(mdns_to, args.device, hosts, args.ca)
+    bonjour = {}
+    for number, entry in enumerate(args.bonjour, 1):
+        kind, where = entry.split("=", 1)
+        port, addresses = where.split("@", 1)
+        line = f"Device {number}\tdevice-{number}.local.\t{int(port)}\t{addresses}\n"
+        bonjour.setdefault(kind, []).append(line.encode())
+    sockets = Sockets(mdns_to, args.device, hosts, args.ca, bonjour)
     terminal = Terminal()
 
     engine = wasmtime.Engine()
@@ -391,20 +441,40 @@ def main():
             "socket": 3, "bind": 3, "listen": 2, "accept": 2, "connect": 3,
             "connect_host": 4, "tls_connect_host": 4,
             "send": 4, "recv": 4, "sendto": 6, "close": 1,
+            "set_recv_timeout": 2, "bonjour_lookup": 6,
         },
         ("rootshell_terminal", terminal): {"set_raw": 1, "is_tty": 1},
     }
+    if args.before_177:
+        for name in ("set_recv_timeout", "bonjour_lookup"):
+            del calls[("rootshell_socket", sockets)][name]
+    # rootshell's wasm-worker.js, buildImports: each call under its own
+    # module, and under `env` too.
+    in_env = set()
     for (module_name, answerer), names in calls.items():
         for name, count in names.items():
             def call(caller, *params, handler=getattr(answerer, name)):
                 return handler(Memory(caller), *params)
-            linker.define_func(
-                module_name,
-                f"{module_name}_{name}",
-                wasmtime.FuncType([i32] * count, [i32]),
-                call,
-                access_caller=True,
-            )
+            for under in (module_name, "env"):
+                linker.define_func(
+                    under,
+                    f"{module_name}_{name}",
+                    wasmtime.FuncType([i32] * count, [i32]),
+                    call,
+                    access_caller=True,
+                )
+            in_env.add(f"{module_name}_{name}")
+    # And stubMissingEnvImports: an `env` call it doesn't have answers 0.
+    for wanted in module.imports:
+        if wanted.module != "env" or wanted.name in in_env or not isinstance(wanted.type, wasmtime.FuncType):
+            continue
+        def stub(*params, name=wanted.name, results=len(wanted.type.results), warned=[]):
+            if not warned:
+                warned.append(True)
+                sys.stderr.write(f"[wasm] unhandled env.{name}({len(params)} args) \u2014 returning 0\n")
+                sys.stderr.flush()
+            return 0 if results else None
+        linker.define_func("env", wanted.name, wanted.type, stub)
 
     store = wasmtime.Store(engine)
     wasi = wasmtime.WasiConfig()

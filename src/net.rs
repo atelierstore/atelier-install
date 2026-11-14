@@ -7,6 +7,16 @@
 //! runtime has no `getsockname`, so a listener's port is one this program
 //! picks, and no way to tell which addresses the iPhone has.
 //!
+//! From rootshell 1.0.16-177 on, a receive can give up after a time limit,
+//! and Bonjour can be asked which devices offer a service. rootshell offers
+//! each of its calls under `env` as well, and fills in an `env` call it
+//! doesn't have with one that answers 0, from 1.0.10 on (its
+//! Resources/Wasm/wasm-worker.js, `buildImports` and
+//! `stubMissingEnvImports`), where a missing `rootshell_socket` call would
+//! keep the program from starting. So those two come from `env`, and the
+//! program asks once which rootshell it's on: [`has_177_calls`]. On an older
+//! one it works as it did before them.
+//!
 //! rootshell hands what a connection received back through one 64 KB slot
 //! of shared memory, as base64 in JSON, and a receive that brings more than
 //! fits fails with EINVAL, its bytes gone (its Resources/Wasm/wasm-host.js).
@@ -17,10 +27,43 @@
 //! calls go to the system's sockets, but for TLS, which is rootshell's.
 
 use std::io::{self, Read, Write};
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
+use std::time::Duration;
 
 pub use imp::Stream;
-pub use imp::{Listener, send_datagram};
+pub use imp::{Listener, bonjour, has_177_calls, send_datagram};
+
+/// A device that offers a Bonjour service: where it does. Its name and host
+/// name, which can be the owner's, aren't kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Service {
+    pub port: u16,
+    pub addresses: Vec<IpAddr>,
+}
+
+/// rootshell's answer to a Bonjour lookup: a line for each device,
+/// "name\thost\tport\taddress,address".
+#[allow(dead_code, reason = "rootshell's, and the tests'")]
+fn services(answer: &str) -> Vec<Service> {
+    answer
+        .lines()
+        .filter_map(|line| {
+            // From the right, as a name may hold anything.
+            let mut fields = line.rsplitn(3, '\t');
+            let addresses = fields.next()?;
+            let port = fields.next()?.parse().ok()?;
+            fields.next()?;
+            Some(Service {
+                port,
+                addresses: addresses
+                    .split(',')
+                    // An IPv6 address can end with its interface, %en0.
+                    .filter_map(|address| address.split('%').next()?.parse().ok())
+                    .collect(),
+            })
+        })
+        .collect()
+}
 
 /// The most one receive asks rootshell for: its base64, 43,692 bytes, and
 /// the JSON around it fit the 64 KB slot with room to spare.
@@ -63,6 +106,28 @@ mod imp {
         fn rootshell_socket_close(fd: i32) -> i32;
     }
 
+    // rootshell 1.0.16-177's: see this file's top.
+    #[link(wasm_import_module = "env")]
+    unsafe extern "C" {
+        fn rootshell_socket_set_recv_timeout(fd: i32, timeout_ms: u32) -> i32;
+        fn rootshell_socket_bonjour_lookup(
+            kind: *const u8,
+            kind_len: i32,
+            timeout_ms: u32,
+            out: *mut u8,
+            out_max: i32,
+            out_len: *mut u32,
+        ) -> i32;
+    }
+
+    /// Whether this rootshell has 1.0.16-177's calls. Asked once, of a
+    /// socket that doesn't exist: rootshell answers EBADF, and an older
+    /// one's stand-in 0, which it notes once on stderr ("unhandled env.").
+    pub fn has_177_calls() -> bool {
+        static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *HAS.get_or_init(|| unsafe { rootshell_socket_set_recv_timeout(-1, 0) } != 0)
+    }
+
     /// rootshell's `sockaddr_in`: the family in the first byte, the port
     /// big-endian, then the address.
     fn sockaddr(address: Ipv4Addr, port: u16) -> [u8; 16] {
@@ -82,15 +147,18 @@ mod imp {
         let (kind, name) = match errno {
             1 => (AddrInUse, "the port is in use"),
             2 => (PermissionDenied, "not allowed"),
+            6 => (WouldBlock, "nothing came in time"),
             8 => (NotConnected, "the socket is closed"),
             // Also what its TLS says of a certificate it doesn't trust.
             14 => (ConnectionRefused, "connection refused"),
             27 => (Interrupted, "interrupted"),
             28 => (InvalidInput, "invalid argument"),
             29 => (BrokenPipe, "the connection broke"),
+            42 => (OutOfMemory, "no room for the answer"),
             44 => (NotFound, "not found"),
             50 => (NetworkUnreachable, "the network is unreachable"),
             52 => (Unsupported, "rootshell has no such call"),
+            64 => (BrokenPipe, "the connection is shut"),
             73 => (TimedOut, "timed out"),
             _ => (Other, "error"),
         };
@@ -194,6 +262,21 @@ mod imp {
             check(what, errno)?;
             Ok(stream)
         }
+
+        /// How long a read waits for something to come before it fails
+        /// with `WouldBlock`, or, with None, that it waits however long.
+        /// Before rootshell 1.0.16-177, it always waits however long.
+        pub fn set_read_limit(&self, limit: Option<Duration>) -> io::Result<()> {
+            if !has_177_calls() {
+                return Ok(());
+            }
+            let ms = limit.map_or(0, |limit| {
+                limit.as_millis().clamp(1, u32::MAX as u128) as u32
+            });
+            check("set_recv_timeout", unsafe {
+                rootshell_socket_set_recv_timeout(self.fd, ms)
+            })
+        }
     }
 
     impl Read for Stream {
@@ -258,6 +341,34 @@ mod imp {
         }
         Ok(())
     }
+
+    /// The devices that offer `kind`, such as `_remotepairing._tcp`, that
+    /// Bonjour finds within `wait`, which rootshell takes up to a minute
+    /// of: it answers once each has a port and an address, and nothing new
+    /// has come for half a second. TimedOut when it finds none, and
+    /// PermissionDenied when rootshell may not look on the local network.
+    pub fn bonjour(kind: &str, wait: Duration) -> io::Result<Vec<Service>> {
+        if !has_177_calls() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "rootshell is older than 1.0.16-177, which asks Bonjour",
+            ));
+        }
+        let mut answer = vec![0u8; 16 * 1024];
+        let mut length = 0u32;
+        check("bonjour_lookup", unsafe {
+            rootshell_socket_bonjour_lookup(
+                kind.as_ptr(),
+                kind.len() as i32,
+                wait.as_millis().clamp(1, 60_000) as u32,
+                answer.as_mut_ptr(),
+                answer.len() as i32,
+                &mut length,
+            )
+        })?;
+        answer.truncate(length as usize);
+        Ok(services(&String::from_utf8_lossy(&answer)))
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -306,6 +417,10 @@ mod imp {
             let _ = stream.set_nodelay(true);
             Ok(Stream(stream))
         }
+
+        pub fn set_read_limit(&self, limit: Option<Duration>) -> io::Result<()> {
+            self.0.set_read_timeout(limit)
+        }
     }
 
     impl Read for Stream {
@@ -328,5 +443,46 @@ mod imp {
         let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         socket.send_to(bytes, (to, port))?;
         Ok(())
+    }
+
+    /// Off rootshell, reads take a time limit, and Bonjour is unsupported.
+    pub fn has_177_calls() -> bool {
+        true
+    }
+
+    /// Bonjour is rootshell's here: off it, nothing is found.
+    pub fn bonjour(_kind: &str, _wait: Duration) -> io::Result<Vec<Service>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Bonjour is rootshell's, and this isn't rootshell",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_rootshells_bonjour_answer() {
+        let answer = "Name's iPhone\tiPhone.local.\t49153\t192.168.1.20,fe80::1c2b:3a4d:5e6f:7081%en0\n\
+                      A\ttab\tname\tMac.local.\t62078\t192.168.1.30\n\
+                      cut short\t49152\n";
+        assert_eq!(
+            services(answer),
+            vec![
+                Service {
+                    port: 49153,
+                    addresses: vec![
+                        "192.168.1.20".parse().unwrap(),
+                        "fe80::1c2b:3a4d:5e6f:7081".parse().unwrap()
+                    ],
+                },
+                Service {
+                    port: 62078,
+                    addresses: vec!["192.168.1.30".parse().unwrap()],
+                },
+            ]
+        );
     }
 }
