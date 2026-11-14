@@ -14,7 +14,7 @@ members = ["testphone", "vendor/isideload"]
 exclude = ["vendor/jktcp", "vendor/idevice", "vendor/apple-codesign-quick"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 publish = false
 license = "GPL-3.0-only"
@@ -57,7 +57,7 @@ tokio = { version = "1", features = ["io-util"] }
 plist.workspace = true
 # The ones isideload builds with, for the IPA's Info.plist and the
 # anisette list.
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 serde_json = "1"
 # What the page shows, as JSON (src/page.rs).
 serde = { version = "1", features = ["derive"] }
