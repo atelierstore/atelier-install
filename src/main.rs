@@ -546,7 +546,10 @@ fn finish(
     let handed = hand_over(&mut phone, kept, signing.as_deref(), pairing, state);
     kept.remove(state);
     state.forget_download();
-    page::show(View::Done { handed });
+    page::show(View::Done {
+        release: format!("{} {}", kept.name, kept.version),
+        handed,
+    });
 
     terminal::notify(&format!(
         "{} is installed. Before it opens, trust your Apple ID in Settings › General › VPN & Device Management.",

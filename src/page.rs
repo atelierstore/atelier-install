@@ -132,8 +132,9 @@ pub enum View {
     },
     /// Signing, then installing.
     Installing { signed: bool, bar: Bar },
-    /// Installed; `handed` when Atelier has the pairing and the sign-in.
-    Done { handed: bool },
+    /// Installed: `release`, its name and version, and `handed` when
+    /// Atelier has the pairing and the sign-in.
+    Done { release: String, handed: bool },
     /// Why the program stopped, and what to do.
     Stopped { what: String, next: Vec<String> },
     /// Stopped from the page, by its Stop the installer.
@@ -789,7 +790,13 @@ mod tests {
 
         // Done is done: nothing to stop.
         let mut page = super::tests::page();
-        page.set(View::Done { handed: true }, false);
+        page.set(
+            View::Done {
+                release: "Atelier 1.0".into(),
+                handed: true,
+            },
+            false,
+        );
         let port = page.port;
         let (_, body) = exchange(&mut page, &stop(port, KEY));
         let state: Value = serde_json::from_str(&body).unwrap();

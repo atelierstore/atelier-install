@@ -1,12 +1,11 @@
 <!doctype html>
 <!--
   The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs).
-  The screens' wording is the mockup Alex approved on 13 Nov 2026
-  (pair, sign-in, code, review, installing, done), with Stop and its
-  ended screen, and the done screen's last line, from the one-page
-  journey's mockup of 14 Nov. The others (busy,
-  question, stopped, and the lines marked "not drawn yet") wait for a
-  mockup of their own.
+  It carries on from atelierstore.app/apple-id, as the same page: the
+  website's header, its four steps with the first two done, and step 3
+  holding the installer's screens. Done moves into step 4. As the mockups
+  Alex approved: the screens of 13 Nov 2026, the states drawn after them,
+  and the one-page journey of 14 Nov.
 -->
 <html lang="en">
 <head>
@@ -19,34 +18,64 @@
 <script src="/page.js" defer></script>
 </head>
 <body>
-<main class="inst">
-  <header class="inst-head"><img src="/icon.png" alt="" width="40" height="40"><div><strong>Install Atelier</strong><span>From rootshell, on this iPhone</span></div></header>
-  <ol class="stepper" id="stepper"><li>Pair</li><li>Sign in</li><li>Install</li></ol>
-  <p class="lost" id="lost" hidden>The installer isn't answering. If it stays this way, open rootshell: its terminal says why.</p>
-  <div class="card" id="card"><p class="wait">Waiting for the installer</p></div>
-  <!-- Until it's installed or stopped: asks first, in place, then ends the
-       installer as Control-C does. -->
-  <div class="stop" id="stop" hidden>
-    <button type="button" class="stop-link" data-stop="ask">Stop the installer</button>
-    <div class="stop-ask" data-stop-part="ask" hidden>
-      <strong>Stop the installer?</strong>
-      <p>Next time, it picks up where it left off.</p>
-      <div class="stop-row">
-        <button type="button" class="btn btn-secondary" data-stop="keep">Keep going</button>
-        <button type="button" class="btn btn-primary" data-stop="stop">Stop</button>
-      </div>
+<header class="hero page-hero">
+  <div class="wrap">
+    <nav class="nav">
+      <span class="brand"><img src="/icon.png" alt="" width="36" height="36"><span>Atelier</span></span>
+      <span class="on-phone"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="2.5"/><path d="M10.5 18.5h3"/></svg>On this iPhone</span>
+    </nav>
+    <div class="page-head">
+      <h1>Install with your Apple ID</h1>
+      <p class="lede">This page comes from the installer, running in rootshell on this iPhone. Don't close rootshell until Atelier is installed.</p>
     </div>
+  </div>
+</header>
+<main class="page-body">
+  <div class="wrap">
+    <ol class="steps">
+      <li class="past"><span class="n" aria-hidden="true">1</span><div class="past-row"><h3>Get the two apps</h3><svg class="tick" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="11"/><path d="M6.5 11.3l3 3 6-6.3"/></svg></div></li>
+      <li class="past"><span class="n" aria-hidden="true">2</span><div class="past-row"><h3>Turn on Developer Mode</h3><svg class="tick" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="11"/><path d="M6.5 11.3l3 3 6-6.3"/></svg></div></li>
+      <li id="step-3">
+        <span class="n" aria-hidden="true">3</span>
+        <div data-part="open">
+          <h3>Install Atelier</h3>
+          <ol class="stepper" id="stepper"><li>Pair</li><li>Sign in</li><li>Install</li></ol>
+          <p class="lost" id="lost" hidden>The installer isn't answering. If it stays this way, open rootshell: its terminal says why.</p>
+          <div class="card" id="card"><p class="wait">Waiting for the installer</p></div>
+          <!-- Until it's installed or stopped: asks first, in place, then
+               ends the installer as Control-C does. -->
+          <div class="stop" id="stop" hidden>
+            <button type="button" class="stop-link" data-stop="ask">Stop the installer</button>
+            <div class="stop-ask" data-stop-part="ask" hidden>
+              <strong>Stop the installer?</strong>
+              <p>Next time, it picks up where it left off.</p>
+              <div class="stop-row">
+                <button type="button" class="btn btn-secondary" data-stop="keep">Keep going</button>
+                <button type="button" class="btn btn-primary" data-stop="stop">Stop</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="past-row" data-part="installed" hidden><div><h3>Install Atelier</h3><small data-field="installed"></small></div><svg class="tick" viewBox="0 0 22 22" aria-hidden="true"><circle cx="11" cy="11" r="11"/><path d="M6.5 11.3l3 3 6-6.3"/></svg></div>
+      </li>
+      <li id="step-4" class="later">
+        <span class="n" aria-hidden="true">4</span>
+        <div>
+          <h3>Open Atelier</h3>
+          <p data-part="later">Once Atelier is installed.</p>
+        </div>
+      </li>
+    </ol>
   </div>
 </main>
 
 <template id="no-key">
-  <!-- Not drawn yet. -->
   <h2>Open this page from the Shortcut</h2>
   <p>Its address has a key that the Install Atelier Shortcut makes.</p>
 </template>
 
 <template id="busy">
-  <!-- Not drawn yet: the title is the installer's. -->
+  <!-- The title is the installer's. -->
   <h2 data-field="title"></h2>
   <div data-part="bar">
     <div class="bar"><i data-field="bar"></i></div>
@@ -71,7 +100,8 @@
 
 <template id="sign-in">
   <h2>Sign in with your Apple ID</h2>
-  <p>Atelier is signed with your Apple ID, free or paid. Your password goes only to Apple.</p>
+  <p data-part="password-line">Atelier is signed with your Apple ID, free or paid. Your password goes only to Apple.</p>
+  <p data-part="token-line" hidden>The installer still has Apple's sign-in from last time. With the same Apple ID, it doesn't need your password.</p>
   <form data-form>
     <label class="field">Apple ID<input class="input" name="apple_id" type="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="name@example.com" required data-keep></label>
     <label class="field" data-part="password">Password<input class="input" name="password" type="password" autocomplete="current-password" required></label>
@@ -92,7 +122,6 @@
     <p class="problem" data-field="problem" hidden></p>
     <button class="btn btn-primary" type="submit">Continue</button>
   </form>
-  <!-- Not drawn yet. -->
   <div class="ways">
     <button type="button" data-action="again">Send a new code</button>
     <button type="button" data-action="text" hidden>Text it to me</button>
@@ -101,7 +130,7 @@
 </template>
 
 <template id="question">
-  <!-- Not drawn yet: the wording is the installer's. -->
+  <!-- The wording is the installer's. -->
   <h2 data-field="title"></h2>
   <div class="text" data-field="text"></div>
   <div class="options" data-field="options" role="radiogroup"></div>
@@ -134,7 +163,7 @@
     <li data-tick="signed" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Signed Atelier</li>
     <li data-tick="installing" class="now" hidden>Installing it</li>
   </ul>
-  <p class="note">You can switch to another app meanwhile. rootshell goes on while Session Only is on.</p>
+  <p class="note">You can switch to another app meanwhile.</p>
 </template>
 
 <template id="done">
@@ -155,7 +184,7 @@
 </template>
 
 <template id="stopped">
-  <!-- Not drawn yet: what stopped it is the installer's. -->
+  <!-- What stopped it is the installer's. -->
   <h2>The install stopped</h2>
   <p data-field="what"></p>
   <ul class="next" data-field="next"></ul>

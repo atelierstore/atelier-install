@@ -9,6 +9,8 @@
   const stepper = document.getElementById("stepper").children;
   const lost = document.getElementById("lost");
   const stop = document.getElementById("stop");
+  const step3 = document.getElementById("step-3");
+  const step4 = document.getElementById("step-4");
 
   /** How often to ask, and how long without an answer before saying so. */
   const EVERY_MS = 800;
@@ -61,7 +63,10 @@
     } else {
       build(view, state.asking, shown && shown.view.screen === view.screen);
     }
+    if (view.screen === "done") installed(view);
+    const changed = !shown || shown.view.screen !== view.screen;
     shown = state;
+    if (changed) bringIntoView(view.screen === "done" ? step4 : step3);
     sending = false;
     if (view.screen === "done" || view.screen === "stopped" || view.screen === "ended") over = true;
     stop.hidden = over;
@@ -84,6 +89,27 @@
     }
     wire(view);
     busy(!asking);
+  }
+
+  /** Done: step 3 is done, and step 4 holds the done screen. */
+  function installed(view) {
+    part(step3, "open").hidden = true;
+    const row = part(step3, "installed");
+    say(row, "installed", `${view.release} is installed`);
+    row.hidden = false;
+    step3.classList.add("past");
+    step4.classList.remove("later");
+    part(step4, "later").hidden = true;
+    step4.querySelector("div").append(card);
+  }
+
+  /** The step that's under way, scrolled to when its screen changes, unless
+   * it shows already: as when coming back from Settings. */
+  function bringIntoView(step) {
+    const top = step.getBoundingClientRect().top;
+    if (top >= 0 && top < window.innerHeight * 0.4) return;
+    const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    step.scrollIntoView({ block: "start", behavior: still ? "auto" : "smooth" });
   }
 
   function field(root, name) {
@@ -117,6 +143,8 @@
         const password = part(root, "password");
         password.hidden = !view.password;
         password.querySelector("input").disabled = !view.password;
+        part(root, "password-line").hidden = !view.password;
+        part(root, "token-line").hidden = view.password;
         break;
       }
       case "code":

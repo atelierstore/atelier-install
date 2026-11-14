@@ -1,6 +1,7 @@
-/* The installer's page, in the website's look: its tokens and buttons from
-   atelierstore/Atelier's infra/website/public/site.css, and the screens as
-   the approved mockup draws them. */
+/* The installer's page, in the website's look: its tokens, header, steps
+   and buttons from atelierstore/Atelier's infra/website/public/site.css,
+   so the page carries on from atelierstore.app/apple-id as the same page,
+   and the screens as the approved mockups draw them. */
 
 /* Bricolage Grotesque (SIL Open Font License 1.1, OFL.txt), Latin only. */
 @font-face {
@@ -14,8 +15,14 @@
 }
 
 :root {
+  /* From the app icon. The same in both themes. */
+  --forest: #3A5A47;
+  --forest-deep: #28412F;
   --forest-tint: #4B8B65;
   --pine: #C9925A;
+  --on-forest: #F3F1E9;
+  --on-forest-2: rgba(243, 241, 233, .78);
+  --on-forest-line: rgba(243, 241, 233, .3);
 
   --bg: #EEF3EF;
   --bg-2: #E3EBE5;
@@ -73,7 +80,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 :focus-visible { outline: 3px solid var(--pine); outline-offset: 3px; border-radius: 6px; }
-h2 { font-family: var(--display); text-wrap: balance; margin: 0; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; }
 p { margin: 0; }
 
 /* Buttons */
@@ -94,22 +101,59 @@ p { margin: 0; }
 .btn.working::after { content: ""; flex: none; width: 15px; height: 15px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(1turn); } }
 
-/* The page */
-.inst {
-  max-width: 520px;
-  margin: 0 auto;
-  padding: 18px max(20px, env(safe-area-inset-right, 0px)) max(30px, env(safe-area-inset-bottom, 0px)) max(20px, env(safe-area-inset-left, 0px));
+/* The website's header, saying it's the installer on this iPhone. */
+.wrap {
+  max-width: 680px;
+  margin-inline: auto;
+  padding-left: max(20px, env(safe-area-inset-left, 0px));
+  padding-right: max(20px, env(safe-area-inset-right, 0px));
 }
-.inst-head { display: flex; align-items: center; gap: 12px; }
-.inst-head img { width: 40px; height: 40px; border-radius: 10px; }
-.inst-head strong { display: block; font: 800 19px/1.15 var(--display); }
-.inst-head span { font-size: 14px; color: var(--ink-2); }
-.stepper { list-style: none; margin: 16px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.hero {
+  color: var(--on-forest);
+  background:
+    radial-gradient(90% 70% at 12% 0%, rgba(255, 255, 255, .07), transparent 60%),
+    linear-gradient(180deg, var(--forest) 0%, var(--forest-deep) 100%);
+  overflow: hidden;
+}
+.nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: max(18px, env(safe-area-inset-top, 0px)) 18px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--on-forest); font: 700 23px/1 var(--display); letter-spacing: -.01em; }
+.brand img { width: 36px; height: 36px; border-radius: 8px; outline: 1px solid rgba(255, 255, 255, .18); outline-offset: -1px; }
+.on-phone { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; border: 1px solid var(--on-forest-line); color: var(--on-forest); font: 600 14px/1 var(--body); white-space: nowrap; }
+.on-phone svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.page-head { padding-block: 10px 36px; }
+.page-head h1 { margin-top: 16px; font-size: clamp(2.4rem, 1.7rem + 2.8vw, 3.7rem); font-weight: 800; font-stretch: 88%; line-height: 1; letter-spacing: -.026em; }
+.lede { margin-top: 18px; max-width: 33em; color: var(--on-forest-2); font-size: clamp(1.06rem, .98rem + .4vw, 1.25rem); line-height: 1.5; }
+
+/* The website's steps: 1 and 2 done, 3 holds the installer's screens, and
+   4 the done screen once it's installed. */
+.page-body { padding-block: 8px max(48px, env(safe-area-inset-bottom, 0px)); }
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps > li { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 18px; padding-block: 26px; border-top: 1px solid var(--line-strong); }
+.steps > li:first-child { border-top: 0; }
+.steps > li:last-child { border-bottom: 1px solid var(--line-strong); }
+.steps .n { font: 800 46px/.9 var(--display); color: var(--pine-ink); }
+.steps h3 { font-size: 1.25rem; line-height: 1.25; }
+.steps > li > div > p { margin-top: 8px; color: var(--ink-2); }
+.steps > li.past { padding-block: 14px; align-items: center; }
+.steps > li.past .n { font-size: 26px; opacity: .45; }
+.steps > li.later .n, .steps > li.later h3 { opacity: .45; }
+.steps > li.later p { opacity: .6; }
+.past-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.past-row h3 { font-size: 1.05rem; color: var(--ink-2); }
+.past-row small { display: block; margin-top: 2px; font-size: 14px; color: var(--ink-2); }
+.tick { flex: none; width: 22px; height: 22px; }
+.tick circle { fill: var(--ok); }
+.tick path { fill: none; stroke: #FFFFFF; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 599px) {
+  .steps > li { grid-template-columns: 30px minmax(0, 1fr); gap: 12px; }
+  .steps .n { font-size: 38px; }
+}
+.stepper { list-style: none; margin: 12px 0 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .stepper li { padding-top: 8px; border-top: 4px solid var(--line-strong); font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .stepper li.done { border-color: var(--forest-tint); color: var(--ink); }
 .stepper li.now { border-color: var(--pine); color: var(--ink); }
 .lost { margin-top: 16px; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--bad); font-size: 15px; font-weight: 600; color: var(--bad); }
-.card { margin-top: 16px; padding: 18px; border-radius: 22px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 18px 32px -24px var(--shadow); }
+.card { margin-top: 14px; padding: 18px; border-radius: 22px; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 18px 32px -24px var(--shadow); }
 .card h2 { font-size: 24px; line-height: 1.15; }
 .card > p, .card .text { margin-top: 8px; color: var(--ink-2); }
 .card .text p + p { margin-top: 8px; }

@@ -123,8 +123,12 @@ pub fn pair(state: &State, address: Option<&str>) -> Result<Pairing, Stop> {
     ));
     terminal::say("  3. Enter your passcode, then the code that will show here.");
     terminal::say("Leave rootshell running meanwhile. It keeps going behind Settings");
-    terminal::say("with Location Diary Mode on and set to Session Only, in its");
-    terminal::say("Settings › General.");
+    if net::has_177_calls() {
+        terminal::say("with Location Diary Mode on, in its Settings › General.");
+    } else {
+        terminal::say("with Location Diary Mode on and set to Session Only, in its");
+        terminal::say("Settings › General.");
+    }
     terminal::say(format!(
         "The entry stays in Settings for {} minutes.",
         mdns::TTL / 60
