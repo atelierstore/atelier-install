@@ -192,10 +192,10 @@ fn wifi_address(given: Option<&str>) -> Result<Ipv4Addr, Stop> {
     }
     // Nobody looks at the terminal.
     if page::on() {
-        return Err(
-            Stop::new("No Wi-Fi address, so there's nothing to announce")
-                .next("Connect to Wi-Fi, then run the Shortcut again."),
-        );
+        return Err(Stop::new(
+            "Pairing needs Wi-Fi, and this iPhone wasn't on Wi-Fi when the Shortcut started",
+        )
+        .next("Connect to Wi-Fi, then run the Shortcut again."));
     }
     terminal::say("Type this iPhone's Wi-Fi address, from Settings › Wi-Fi › ⓘ › IP Address:");
     let _ = std::io::stdout().flush();

@@ -180,7 +180,10 @@
 <template id="ended">
   <h2>The installer has stopped</h2>
   <p>You stopped it. You can close rootshell and this page.</p>
-  <p class="note">To carry on, run the Shortcut again. It picks up where it left off.</p>
+  <!-- A run ends with its page: carrying on takes a new run, with a new
+       page. Shortcuts asks first, then runs it. -->
+  <a class="btn btn-primary" href="shortcuts://run-shortcut?name=Install%20Atelier">Run the Shortcut again</a>
+  <p class="note">It picks up where it left off.</p>
 </template>
 
 <template id="stopped">
@@ -188,6 +191,7 @@
   <h2>The install stopped</h2>
   <p data-field="what"></p>
   <ul class="next" data-field="next"></ul>
+  <a class="btn btn-primary" href="shortcuts://run-shortcut?name=Install%20Atelier">Run the Shortcut again</a>
   <p class="note">rootshell's terminal says the same, and atelier-install.log, in rootshell's folder, has the details.</p>
 </template>
 </body>
