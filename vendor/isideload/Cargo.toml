@@ -48,7 +48,7 @@ rsa = { version = "0.9.10" }
 tokio = { version = "1.49", features = ["sync"] }
 rcgen = { version = "0.14.7", default-features = false, features = ["ring", "pem"] }
 p12-keystore = { version = "0.3.0-rc4", package = "isideload-p12-keystore" }
-zip = { version = "8.3", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 isideload-vfs = { version = "0.0.1" }
 sha1 = "0.11.0"
 http = "1.4.0"

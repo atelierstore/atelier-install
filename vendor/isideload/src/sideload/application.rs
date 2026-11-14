@@ -35,10 +35,10 @@ fn extract<R: std::io::Read + std::io::Seek>(
 ) -> Result<(), Report> {
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
+        let name = entry.name()?.into_owned();
         let Some(relative) = entry.enclosed_name() else {
             bail!(SideloadError::InvalidBundle(format!(
-                "The archive's entry {} would land outside it",
-                entry.name()
+                "The archive's entry {name} would land outside it"
             )));
         };
         let path = to.join(relative);
@@ -48,8 +48,7 @@ fn extract<R: std::io::Read + std::io::Seek>(
         }
         if entry.is_symlink() {
             bail!(SideloadError::InvalidBundle(format!(
-                "The archive's entry {} is a symbolic link, which can't be unpacked here",
-                entry.name()
+                "The archive's entry {name} is a symbolic link, which can't be unpacked here"
             )));
         }
         if let Some(parent) = path.parent() {

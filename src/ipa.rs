@@ -3,6 +3,7 @@
 //! installs, with the download on isideload's HTTP client, through
 //! rootshell's TLS.
 
+use std::borrow::Cow;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -201,8 +202,9 @@ fn info(path: &Path) -> Result<Info, String> {
         zip::ZipArchive::new(file).map_err(|_| "it isn't a zip archive".to_string())?;
     let name = archive
         .file_names()
+        .flatten()
         .find(|name| is_app_info(name))
-        .map(str::to_owned)
+        .map(Cow::into_owned)
         .ok_or("it has no app in a Payload folder")?;
     let mut bytes = Vec::new();
     archive
