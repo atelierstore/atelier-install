@@ -95,10 +95,14 @@ pub fn notify(text: &str) {
 pub fn step(number: u32, of: u32, title: &str) {
     println!();
     println!("[{number}/{of}] {title}");
-    let seconds = STARTED
+    log(format!("[{number}/{of}] {title} ({} s in)", seconds()));
+}
+
+/// The seconds since the log began, for the log.
+pub fn seconds() -> u64 {
+    STARTED
         .get()
-        .map_or(0, |started| started.elapsed().as_secs());
-    log(format!("[{number}/{of}] {title} ({seconds} s in)"));
+        .map_or(0, |started| started.elapsed().as_secs())
 }
 
 /// A line under a step.

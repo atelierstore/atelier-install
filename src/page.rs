@@ -223,7 +223,11 @@ pub fn start(address: &Address) -> Result<(), Stop> {
         "  The page is at http://127.0.0.1:{}/#{}",
         address.port, address.key
     );
-    terminal::log(format!("the page: port {}", address.port));
+    terminal::log(format!(
+        "the page: port {}, {} s in",
+        address.port,
+        terminal::seconds()
+    ));
     PAGE.set(Some(page));
     Ok(())
 }
@@ -231,6 +235,17 @@ pub fn start(address: &Address) -> Result<(), Stop> {
 /// Whether the program has a page to show.
 pub fn on() -> bool {
     PAGE.with_borrow(Option::is_some)
+}
+
+/// Waits for Safari to have the page, answering it meanwhile: with the page,
+/// nothing happens before it shows. The Shortcut opens Safari a moment after
+/// rootshell, and only the page asks for the state with the key.
+pub fn wait_for_visit() -> Result<(), Stop> {
+    if with(|page| page.visited).unwrap_or(true) {
+        return Ok(());
+    }
+    terminal::say("Waiting for Safari to open the page.");
+    with(Page::wait_for_visit).unwrap_or(Ok(()))
 }
 
 /// Shows `view`, and answers whoever is waiting.
@@ -350,6 +365,8 @@ struct Page {
     served: Instant,
     /// Whether the port has stopped working, which the log says once.
     failed: bool,
+    /// Whether the page has asked for the state with the key yet.
+    visited: bool,
 }
 
 impl Page {
@@ -369,6 +386,7 @@ impl Page {
             fetched: 0,
             served: Instant::now(),
             failed: false,
+            visited: false,
         })
     }
 
@@ -399,6 +417,21 @@ impl Page {
                 }
             }
         }
+    }
+
+    fn wait_for_visit(&mut self) -> Result<(), Stop> {
+        while !self.visited {
+            match self.door.wait() {
+                Ok(visitor) => self.serve(visitor),
+                Err(error) => {
+                    terminal::log(format!("the page's port: {error}"));
+                    self.failed = true;
+                    return Err(Stop::new("The page's port stopped working")
+                        .next("Run the Shortcut again."));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn serve_waiting(&mut self) {
@@ -463,6 +496,13 @@ impl Page {
                 http::answer("403 Forbidden", TEXT, b"Only the page asks this.\n")
             }
             ("GET", "/state") => {
+                if !self.visited {
+                    self.visited = true;
+                    terminal::log(format!(
+                        "the page: first visit, {} s in",
+                        terminal::seconds()
+                    ));
+                }
                 self.fetched = self.seq;
                 file(JSON, &self.state())
             }
@@ -543,6 +583,7 @@ mod tests {
             fetched: 0,
             served: Instant::now(),
             failed: false,
+            visited: false,
         }
     }
 
@@ -611,7 +652,9 @@ mod tests {
             "HTTP/1.1 403 Forbidden"
         );
         assert_eq!(page.fetched, 0);
+        assert!(!page.visited);
         let (status, body) = get(&mut page, "/state", Some(KEY));
+        assert!(page.visited);
         assert_eq!(status, "HTTP/1.1 200 OK");
         let state: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(state["seq"], 1);

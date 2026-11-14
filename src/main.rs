@@ -236,6 +236,7 @@ fn main() -> ExitCode {
         if let Some(address) = &options.page {
             page::start(address)?;
             terminal::no_notifications();
+            page::wait_for_visit()?;
         }
         let result = run(&options, &state);
         // The IPA as it was unpacked and signed, unless it waits for the

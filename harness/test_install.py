@@ -396,6 +396,18 @@ def page(address, closed):
           "the page under another name", program)
     print("ok  the page answers only with its key, and only under its own name")
 
+    # Nothing happens before the page asks for the state with the key: no
+    # announcement for Settings yet.
+    program.wait_for(r"Waiting for Safari to open the page", "that it waits for the page")
+    observer.settimeout(2)
+    try:
+        observer.recv(4096)
+        fail("it announced itself before the page had asked for anything", program)
+    except socket.timeout:
+        pass
+    observer.settimeout(30)
+    print("ok  with the page, it waits for Safari's first visit before anything else")
+
     # A connection that says nothing holds it up for a moment only.
     silent = socket.create_connection(("127.0.0.1", port))
     started = time.monotonic()
