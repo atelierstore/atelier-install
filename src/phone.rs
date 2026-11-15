@@ -5,9 +5,11 @@
 //! its own (`tunnel.rs`).
 //!
 //! iOS picks the pairing service's port, and it can move after a restart.
-//! The program asks Bonjour where this iPhone offers it
-//! (`_remotepairing._tcp`), and otherwise goes to the port the user gives,
-//! the one that worked last, or 49152. It never tries port by port.
+//! The program asks Bonjour which devices offer it (`_remotepairing._tcp`)
+//! and tries their ports at 10.7.0.1, where only this iPhone answers: the
+//! ones at this iPhone's addresses first, then the port that worked last
+//! and 49152, then the other devices'. From rootshell 1.0.16-177 on, a port
+//! nothing listens at refuses at once. It never sweeps a range of ports.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
@@ -40,28 +42,70 @@ const LABEL: &str = "Atelier";
 const SERVICE: &str = "_remotepairing._tcp";
 const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The port this iPhone's pairing service has now, from Bonjour: of the
-/// devices that offer it, the one at `wifi`, this iPhone's Wi-Fi address,
-/// or the only one when that isn't known. Why not, otherwise, for the log.
-pub fn find_port(wifi: Option<Ipv4Addr>) -> Result<u16, String> {
+/// The most ports the program tries that Bonjour gives.
+const MOST_PORTS: usize = 8;
+
+/// What Bonjour says of the pairing service: the ports of the devices at
+/// one of `ours`, this iPhone's addresses, then the other devices', and a
+/// line for the log without their addresses. Why not, otherwise.
+pub fn find_ports(ours: &[IpAddr]) -> Result<(Vec<u16>, Vec<u16>, String), String> {
     let services = net::bonjour(SERVICE, LOOK_FOR).map_err(|error| error.to_string())?;
-    pick(&services, wifi).ok_or_else(|| {
-        format!(
-            "{} device(s) offer it, none of them at this iPhone's Wi-Fi address",
-            services.len()
-        )
-    })
+    if services.is_empty() {
+        return Err("no device offers it".into());
+    }
+    let (mine, others) = split(&services, ours);
+    Ok((mine, others, describe(&services, ours)))
 }
 
-fn pick(services: &[net::Service], wifi: Option<Ipv4Addr>) -> Option<u16> {
-    match (wifi, services) {
-        (Some(wifi), _) => services
-            .iter()
-            .find(|service| service.addresses.contains(&IpAddr::V4(wifi)))
-            .map(|service| service.port),
-        (None, [only]) => Some(only.port),
-        (None, _) => None,
+fn is_ours(service: &net::Service, ours: &[IpAddr]) -> bool {
+    service
+        .addresses
+        .iter()
+        .any(|address| ours.contains(address))
+}
+
+/// The ports of the devices at one of `ours`, then the others', each once.
+fn split(services: &[net::Service], ours: &[IpAddr]) -> (Vec<u16>, Vec<u16>) {
+    let mut mine = Vec::new();
+    let mut others = Vec::new();
+    for service in services {
+        let ports = if is_ours(service, ours) {
+            &mut mine
+        } else {
+            &mut others
+        };
+        if !ports.contains(&service.port) {
+            ports.push(service.port);
+        }
     }
+    others.retain(|port| !mine.contains(port));
+    others.truncate(MOST_PORTS);
+    mine.truncate(MOST_PORTS);
+    (mine, others)
+}
+
+/// What Bonjour found, for the log: each device's port, how many addresses
+/// of each kind it has, and whether one is this iPhone's. No addresses.
+fn describe(services: &[net::Service], ours: &[IpAddr]) -> String {
+    let each: Vec<String> = services
+        .iter()
+        .map(|service| {
+            let v4 = service.addresses.iter().filter(|a| a.is_ipv4()).count();
+            let v6 = service.addresses.len() - v4;
+            let whose = if is_ours(service, ours) {
+                "this iPhone's"
+            } else {
+                "not at this iPhone's addresses"
+            };
+            format!("port {} ({v4} IPv4, {v6} IPv6, {whose})", service.port)
+        })
+        .collect();
+    format!(
+        "{} device(s) offer it, {} address(es) known for this iPhone: {}",
+        services.len(),
+        ours.len(),
+        each.join("; ")
+    )
 }
 
 #[derive(Debug)]
@@ -220,21 +264,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn picks_this_iphone_of_the_devices_bonjour_finds() {
-        let service = |port, address: &str| net::Service {
+    fn puts_this_iphones_ports_first_of_what_bonjour_finds() {
+        let service = |port, addresses: &[&str]| net::Service {
             port,
-            addresses: vec![address.parse().unwrap(), "fe80::1".parse().unwrap()],
+            addresses: addresses.iter().map(|a| a.parse().unwrap()).collect(),
         };
         let found = [
-            service(62078, "192.168.1.30"),
-            service(49153, "192.168.1.20"),
+            service(62078, &["192.168.1.30"]),
+            service(52143, &["fe80::1c2d:3e4f:5a6b:7c8d"]),
+            service(49153, &["192.168.1.20", "fe80::1"]),
+            service(62078, &["192.168.1.31"]),
         ];
-        let wifi = Some(Ipv4Addr::new(192, 168, 1, 20));
-        assert_eq!(pick(&found, wifi), Some(49153));
-        assert_eq!(pick(&found, Some(Ipv4Addr::new(192, 168, 1, 99))), None);
-        // Without the Wi-Fi address, only when there's no telling which.
-        assert_eq!(pick(&found, None), None);
-        assert_eq!(pick(&found[1..], None), Some(49153));
-        assert_eq!(pick(&[], wifi), None);
+        let ours: Vec<IpAddr> = ["192.168.1.20".parse().unwrap()].into();
+        assert_eq!(split(&found, &ours), (vec![49153], vec![62078, 52143]));
+        // Only by IPv6, as when Bonjour lists the iPhone's link-local address.
+        let ours: Vec<IpAddr> = ["fe80::1c2d:3e4f:5a6b:7c8d".parse().unwrap()].into();
+        assert_eq!(split(&found, &ours), (vec![52143], vec![62078, 49153]));
+        // Without this iPhone's addresses, every port, as found.
+        assert_eq!(split(&found, &[]), (vec![], vec![62078, 52143, 49153]));
+        assert_eq!(split(&[], &ours), (vec![], vec![]));
+        let said = describe(&found[1..3], &ours);
+        assert_eq!(
+            said,
+            "2 device(s) offer it, 1 address(es) known for this iPhone: \
+             port 52143 (0 IPv4, 1 IPv6, this iPhone's); \
+             port 49153 (1 IPv4, 1 IPv6, not at this iPhone's addresses)"
+        );
+        assert!(!said.contains("192.168") && !said.contains("fe80"));
     }
 }

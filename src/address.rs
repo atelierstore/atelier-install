@@ -13,7 +13,7 @@
 //! interface's `inet`, after a tab, or the next interface's header
 //! (`…TSO_V6>utun0: flags=8051<…>`). Seen on an iPhone on 14 Nov 2026.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 
 /// The Wi-Fi's interface on an iPhone.
 const WIFI: &str = "en0";
@@ -51,6 +51,34 @@ pub fn find(text: &str) -> Option<Ipv4Addr> {
         let only = words.next()?;
         words.next().is_none().then(|| usable(only)).flatten()
     })
+}
+
+/// Every address `text`, `ifconfig`'s output, gives this iPhone, on every
+/// interface and IPv6's too, but loopback and LocalDevVPN's: the ones
+/// Bonjour can list for its pairing service.
+pub fn all(text: &str) -> Vec<IpAddr> {
+    let mut found: Vec<IpAddr> = Vec::new();
+    for line in unglued(text).lines() {
+        let mut words = line.split_whitespace();
+        if !matches!(words.next(), Some("inet" | "inet6")) {
+            continue;
+        }
+        let Some(word) = words.next().map(|word| word.trim_start_matches("addr:")) else {
+            continue;
+        };
+        // An IPv6 address can end with its interface, %en0.
+        let Some(Ok(address)) = word.split('%').next().map(str::parse::<IpAddr>) else {
+            continue;
+        };
+        if !address.is_loopback()
+            && !address.is_unspecified()
+            && !LOCAL_DEV_VPN.contains(&word)
+            && !found.contains(&address)
+        {
+            found.push(address);
+        }
+    }
+    found
 }
 
 /// Whether `text`, `ifconfig`'s output, lists LocalDevVPN's tunnel: it was
@@ -194,6 +222,26 @@ mod tests {
         \tstatus: active\n\
         utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1500\n\
         \tinet 10.7.1.1 --> 10.7.0.1 netmask 0xffffffff\n";
+
+    #[test]
+    fn every_address_of_this_iphone() {
+        let text = format!(
+            "{EVERY_INTERFACE}en1: flags=8863<UP> mtu 1500\n\
+             \tinet6 fe80::1c2d:3e4f:5a6b:7c8d%en1 prefixlen 64 scopeid 0xf\n\
+             \tinet6 2001:db8::20 prefixlen 64 autoconf secured\n"
+        );
+        let all: Vec<String> = all(&text).iter().map(ToString::to_string).collect();
+        assert_eq!(
+            all,
+            [
+                "10.142.7.9",
+                "192.168.1.20",
+                "fe80::1c2d:3e4f:5a6b:7c8d",
+                "2001:db8::20"
+            ]
+        );
+        assert!(super::all("ifconfig: interface en0 does not exist").is_empty());
+    }
 
     #[test]
     fn the_wifi_among_every_interface() {
