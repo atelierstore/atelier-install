@@ -330,11 +330,14 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
         })
     };
     connecting();
-    let port = options.port.unwrap_or_else(|| pairing_port(state));
-    let phone = match reach(&mut pairing, port) {
+    let ports = match options.port {
+        Some(port) => vec![port],
+        None => pairing_ports(state),
+    };
+    let (phone, port) = match reach_any(&mut pairing, &ports) {
         // A pairing the iPhone has forgotten, as when it's been reset, or
         // the pairing program's from before that.
-        Err(phone::Problem::NotPaired) if !paired_now => {
+        Err((phone::Problem::NotPaired, _)) if !paired_now => {
             let _ = fs::remove_file(state.pairing());
             terminal::say("This iPhone doesn't know the pairing any more, so it pairs anew.");
             pairing = pairing::pair(state, options.address.as_deref())?;
@@ -342,11 +345,11 @@ fn run(options: &Options, state: &State) -> Result<(), Stop> {
             page::paired();
             vpn_on()?;
             connecting();
-            reach(&mut pairing, port)
+            reach_any(&mut pairing, &ports)
         }
         reached => reached,
     }
-    .map_err(|problem| explain(problem, state, port, paired_now))?;
+    .map_err(|(problem, port)| explain(problem, state, port, paired_now))?;
     state.set_port(port);
     let ios = phone
         .ios
@@ -1040,22 +1043,69 @@ fn reach(pairing: &mut Pairing, port: u16) -> Result<phone::Phone, phone::Proble
     phone::connect(&mut pairing.file, port)
 }
 
-/// Where the iPhone's pairing service is: where Bonjour finds it, or else
-/// at the port that last worked, or iOS's usual one.
-fn pairing_port(state: &State) -> u16 {
-    let wifi = fs::read_to_string(state::files_folder().join(pairing::IFCONFIG_FILE))
-        .ok()
-        .and_then(|text| address::find(&text));
-    match phone::find_port(wifi) {
-        Ok(port) => {
-            terminal::log(format!("Bonjour: the pairing service is at port {port}"));
-            port
+/// Opens the tunnel through the first of `ports` where the pairing service
+/// answers, going on to the next while nothing listens. The port it opened
+/// at, or what stopped it and the port it names: the first, when nothing
+/// listens at any.
+fn reach_any(
+    pairing: &mut Pairing,
+    ports: &[u16],
+) -> Result<(phone::Phone, u16), (phone::Problem, u16)> {
+    let first = ports.first().copied().unwrap_or(phone::DEFAULT_PORT);
+    for (at, &port) in ports.iter().enumerate() {
+        match reach(pairing, port) {
+            Ok(phone) => return Ok((phone, port)),
+            Err(phone::Problem::NoService(why)) if at + 1 < ports.len() => {
+                terminal::log(format!("port {port}: {why}"));
+            }
+            Err(phone::Problem::NoService(why)) if at > 0 => {
+                terminal::log(format!("port {port}: {why}"));
+                return Err((phone::Problem::NoService(why), first));
+            }
+            Err(problem) => return Err((problem, port)),
+        }
+    }
+    Err((phone::Problem::NoService("no port to try".into()), first))
+}
+
+/// Where the iPhone's pairing service may be, in the order to try: the
+/// ports Bonjour finds at this iPhone's addresses, the port that last
+/// worked, iOS's usual one, then the other ports Bonjour finds, in case
+/// it lists this iPhone at addresses `ifconfig.txt` doesn't.
+fn pairing_ports(state: &State) -> Vec<u16> {
+    let ours = fs::read_to_string(state::files_folder().join(pairing::IFCONFIG_FILE))
+        .map(|text| address::all(&text))
+        .unwrap_or_default();
+    let (mine, others) = match phone::find_ports(&ours) {
+        Ok((mine, others, found)) => {
+            terminal::log(format!("Bonjour: {found}"));
+            (mine, others)
         }
         Err(why) => {
             terminal::log(format!("Bonjour: {why}"));
-            state.port().unwrap_or(phone::DEFAULT_PORT)
+            (Vec::new(), Vec::new())
+        }
+    };
+    let mut ports = Vec::new();
+    for port in mine
+        .into_iter()
+        .chain(state.port())
+        .chain([phone::DEFAULT_PORT])
+        .chain(others)
+    {
+        if !ports.contains(&port) {
+            ports.push(port);
         }
     }
+    terminal::log(format!(
+        "ports to try: {}",
+        ports
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    ports
 }
 
 /// What to do when the tunnel didn't open. `paired_now` when the pairing

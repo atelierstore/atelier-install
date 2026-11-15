@@ -217,15 +217,48 @@ def main():
     print("ok  a second run uses the kept pairing")
 
     # Without --port, where Bonjour finds this iPhone's pairing service:
-    # of the devices that offer it, the one at its Wi-Fi address.
+    # of the devices that offer it, the one at its Wi-Fi address first, then
+    # the usual port, then the other devices', in case one is this iPhone
+    # at an address ifconfig.txt doesn't list. Nothing listens at any, so
+    # it tries each and names the first.
+    other = closed_port()
     status, said = run(folder, "--check", rootshell=bonjour(
-        (closed_port(), "192.0.2.7"), (port, f"{address},fe80::1c2b:3a4d:5e6f:7081%en0")))
+        (other, "192.0.2.7"), (port, f"{address},fe80::1c2b:3a4d:5e6f:7081%en0")))
     with open(os.path.join(folder, "atelier-install.log")) as log:
         logged = log.read()
     check(status == 1 and f"pairing service didn't answer at port {port}" in said
-          and f"Bonjour: the pairing service is at port {port}" in logged,
-          f"without --port, it said ({status}):\n{said}")
-    print("ok  without --port, it goes where Bonjour finds this iPhone's pairing service")
+          and f"ports to try: {port}, 49152, {other}" in logged
+          and f"port {port} (1 IPv4, 1 IPv6, this iPhone's)" in logged
+          and f"port {other}: " in logged and address not in logged,
+          f"without --port, it said ({status}):\n{said}\nand logged:\n{logged}")
+    print("ok  without --port, it tries this iPhone's port from Bonjour first, then the others")
+
+    # Where Bonjour lists this iPhone only at an address ifconfig.txt
+    # doesn't give, it goes on past the ports where nothing listens to the
+    # one that answers. A listener that hangs up stands in for the service.
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(4)
+    answering = listener.getsockname()[1]
+
+    def hang_up():
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            connection.close()
+
+    threading.Thread(target=hang_up, daemon=True).start()
+    status, said = run(folder, "--check", rootshell=bonjour((answering, "fe80::99%en0")))
+    listener.close()
+    with open(os.path.join(folder, "atelier-install.log")) as log:
+        logged = log.read()
+    check(status == 1 and f"at port {answering}" in said
+          and "Couldn't connect to this iPhone" in said
+          and f"ports to try: 49152, {answering}" in logged and "port 49152: " in logged,
+          f"past a closed port, it said ({status}):\n{said}\nand logged:\n{logged}")
+    print("ok  it goes on past a port where nothing listens to the next Bonjour gives")
 
     # On a rootshell before 177, it starts all the same, says why it can't
     # ask Bonjour, and goes to the port that worked last, or 49152.
