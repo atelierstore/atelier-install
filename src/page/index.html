@@ -1,11 +1,13 @@
 <!doctype html>
 <!--
-  The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs).
+  The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs),
+  in the Install Atelier Shortcut's web view over rootshell.
   It carries on from atelierstore.app/apple-id, as the same page: the
   website's header, its four steps with the first two done, and step 3
   holding the installer's screens. Done moves into step 4. As the mockups
   Alex approved: the screens of 13 Nov 2026, the states drawn after them,
-  and the one-page journey of 14 Nov.
+  the one-page journey of 14 Nov, and the web view's wording of 15 Nov,
+  without Location Diary Mode.
 -->
 <html lang="en">
 <head>
@@ -26,7 +28,7 @@
     </nav>
     <div class="page-head">
       <h1>Install with your Apple ID</h1>
-      <p class="lede">This page comes from the installer, running in rootshell on this iPhone. Don't close rootshell until Atelier is installed.</p>
+      <p class="lede">This page comes from the installer, running in rootshell on this iPhone. Stay on it until Atelier is installed: rootshell pauses when you leave.</p>
     </div>
   </div>
 </header>
@@ -40,7 +42,7 @@
         <div data-part="open">
           <h3>Install Atelier</h3>
           <ol class="stepper" id="stepper"><li>Pair</li><li>Sign in</li><li>Install</li></ol>
-          <p class="lost" id="lost" hidden>The installer isn't answering. If it stays this way, open rootshell: its terminal says why.</p>
+          <p class="lost" id="lost" hidden>The installer isn't answering. If it stays this way, tap Done: rootshell's terminal, behind this page, says why.</p>
           <div class="card" id="card"><p class="wait">Waiting for the installer</p></div>
           <!-- Until it's installed or stopped: asks first, in place, then
                ends the installer as Control-C does. -->
@@ -88,12 +90,12 @@
   <h2>Pair your iPhone with Atelier</h2>
   <p>This lets Atelier install apps on this iPhone. You do it once.</p>
   <ol>
-    <li>Open <strong>Settings › Privacy &amp; Security › Developer Mode</strong>.</li>
-    <li>Scroll down and tap <strong>Pair with Atelier</strong>.</li>
-    <li>Enter your passcode, then this code.</li>
+    <li>Tap <strong>Done</strong>, at the top. Settings opens.</li>
+    <li>Go to <strong>Privacy &amp; Security › Developer Mode</strong>, scroll down and tap <strong>Pair with Atelier</strong>.</li>
+    <li>Enter your passcode, then this code. A notification shows it when Settings asks.</li>
   </ol>
   <div class="code"><span>Your code</span><b data-field="code"></b></div>
-  <p class="note">Then come back here. The page goes on by itself.</p>
+  <p class="note">Once you've paired, this page comes back by itself.</p>
   <p class="problem" data-field="problem" hidden></p>
   <p class="wait">Waiting for Settings</p>
 </template>
@@ -113,7 +115,7 @@
 
 <template id="code">
   <h2>Enter Apple's code</h2>
-  <p data-field="sent">Apple sent a six-digit code to your devices. When this iPhone shows it, note it, then come back here.</p>
+  <p data-field="sent">Apple sent a six-digit code to your devices. When this iPhone shows it, note it, then enter it here.</p>
   <form data-form>
     <div class="digits-box">
       <input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" aria-label="Apple's code" required>
@@ -163,7 +165,7 @@
     <li data-tick="signed" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Signed Atelier</li>
     <li data-tick="installing" class="now" hidden>Installing it</li>
   </ul>
-  <p class="note">You can switch to another app meanwhile.</p>
+  <p class="note">Stay on this page until it's done. rootshell pauses when you leave.</p>
 </template>
 
 <template id="done">

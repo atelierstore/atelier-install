@@ -397,6 +397,20 @@ class Page:
             time.sleep(0.3)
         fail(f"the page never showed {screen}", program)
 
+    def pairing(self, known):
+        """The Shortcut's question about pairing: held until it changes from
+        `known`, or for 12 seconds."""
+        status, body = self.ask("GET", f"/pairing/{known}", headers={"X-Atelier-Key": self.key})
+        check(status == 200, f"the pairing's news: {status} {body!r}")
+        return json.loads(body)
+
+    def pairing_later(self, known):
+        """The same, asked in the background, as the Shortcut waits while
+        the person is in Settings: a queue that gets its news."""
+        news = queue.Queue()
+        threading.Thread(target=lambda: news.put(self.pairing(known)), daemon=True).start()
+        return news
+
     def answer(self, state, answer):
         body = json.dumps({"seq": state["seq"], "answer": answer}).encode()
         status, reply = self.ask("POST", "/answer", body, {
@@ -457,16 +471,39 @@ def page(address, closed):
     packet, _ = observer.recvfrom(4096)
     record = dnslib.DNSRecord.parse(packet)
     srv = next(a for a in record.rr if dnslib.QTYPE[a.rtype] == "SRV")
+    # The person taps Done and goes to Settings: the Shortcut asks how
+    # pairing goes, and hears when Settings asks for the code.
+    waiting = page.pairing_later("waiting")
+    time.sleep(1)
+    check(waiting.empty(), "the Shortcut's question was answered before there was news", program)
     phone = subprocess.Popen([PHONE, "pair", address, str(srv.rdata.port)], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     check(phone.stdout.readline().strip() == "code?", "the phone didn't get to the code", program)
+    news = waiting.get(timeout=10)
+    check(news == {"pairing": "asked", "changed": True, "code": code,
+                   "notice": f"Code for Settings: {code[:3]} {code[3:]}"},
+          f"when Settings asked for the code, the Shortcut heard {news}", program)
+    print("ok  the Shortcut hears the moment Settings asks for the code, with the notification's words")
     # From here until the code is typed, the program waits on the phone, as
-    # the person is in Settings: the page shows the code already.
+    # the person is in Settings. It still answers the page, and the
+    # Shortcut hears of no news in time to bring rootshell to the front.
+    check(page.state()["view"]["screen"] == "pair", "the page while the phone waits for the code", program)
+    started = time.monotonic()
+    news = page.pairing("asked")
+    took = time.monotonic() - started
+    check(news == {"pairing": "asked", "changed": False, "code": code,
+                   "notice": f"Code for Settings: {code[:3]} {code[3:]}"} and 11 <= took < 16,
+          f"with no news, the Shortcut heard {news} after {took:.1f} s", program)
+    print(f"ok  while the phone waits for the code, it answers the page, and the Shortcut hears of no news after {took:.0f} s")
+    paired = page.pairing_later("asked")
+    time.sleep(1)
     phone.stdin.write(code + "\n")
     phone.stdin.flush()
     phone.stdout.read()
     check(phone.wait(timeout=30) == 0, f"the phone didn't pair on the page's code: {phone.stderr.read()}", program)
-    print("ok  the page shows the code before the phone asks, and the phone pairs on it")
+    news = paired.get(timeout=10)
+    check(news == {"pairing": "paired", "changed": True}, f"once paired, the Shortcut heard {news}", program)
+    print("ok  the page shows the code before the phone asks, the phone pairs on it, and the Shortcut hears so")
 
     # Without LocalDevVPN in ifconfig.txt, the page asks for it.
     state = page.wait_for("question", program)
