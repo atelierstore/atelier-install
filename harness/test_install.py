@@ -576,6 +576,7 @@ def page(address, closed):
     status, said = program.end()
     check(status == 1 and "This Install Atelier Shortcut is an earlier one" in said
           and "touch and hold Install Atelier, then tap Delete" in said
+          and "If you also have Install Atelier 2, delete it too" in said
           and "atelierstore.app/apple-id" in said and "LocalDevVPN" not in said,
           f"for an earlier Shortcut, it said ({status}):\n{said}")
     with open(os.path.join(folder, "atelier-install.log")) as log:

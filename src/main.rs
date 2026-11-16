@@ -297,7 +297,7 @@ fn earlier_shortcut() -> Stop {
         page::end();
     }
     Stop::new("This Install Atelier Shortcut is an earlier one: it opens the page in Safari, which needs Location Diary Mode. The new one shows it over rootshell")
-        .next("Delete this one first: in Shortcuts, touch and hold Install Atelier, then tap Delete.")
+        .next("Delete this one first: in Shortcuts, touch and hold Install Atelier, then tap Delete. If you also have Install Atelier 2, delete it too.")
         .next("Then add the new one at atelierstore.app/apple-id: tap Install Atelier to add it, then again to run it.")
 }
 
