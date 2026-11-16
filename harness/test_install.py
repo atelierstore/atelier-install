@@ -20,7 +20,7 @@ shows before the phone connects, pairs the phone on it, answers its
 question about LocalDevVPN, and reads why it stopped at the tunnel. And
 checks that the page answers nobody without its key or under another name,
 and that the key isn't in the log. In the Shortcut's web view
-(--web-view), what the Shortcut hears when you close it, and that the
+(--shortcut 2), what the Shortcut hears when you close it, and that the
 program goes on until the Shortcut has heard it's over.
 
     cargo build --release --target wasm32-wasip1
@@ -436,7 +436,7 @@ def page(address, closed):
     observer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     observer.bind(("127.0.0.1", 0))
     observer.settimeout(30)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--web-view", "--port", closed,
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed,
                       mdns_port=observer.getsockname()[1])
     page = Page(port, key)
 
@@ -568,7 +568,7 @@ def page(address, closed):
     with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
         ifconfig.write(IFCONFIG.format(address=address))
     port = random.randint(20000, 29999)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--web-view", "--port", closed)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed)
     page = Page(port, key)
     page.wait_for("pair", program)
     check(page.ask("POST", "/stop", body=b"")[0] == 403, "a stop without the key", program)

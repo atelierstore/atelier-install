@@ -29,9 +29,9 @@
 //! once paired, it opens rootshell and the page again; and on no news, it
 //! opens rootshell for a moment, which gives it another 25 seconds.
 //!
-//! The Shortcut says so with `--web-view`: an older Install Atelier
-//! Shortcut opens the page in Safari, and needs Location Diary Mode, so the
-//! page keeps Safari's wording for it. In the web view, each time you close
+//! The Shortcut says so with its version, `--shortcut 2` and later
+//! ([`WEB_VIEW`]): version 1, which passes none, opens the page in Safari,
+//! and needs Location Diary Mode, so the page keeps Safari's wording for it. In the web view, each time you close
 //! it with Done, the Shortcut asks what's next at `/closed`: Settings, for
 //! Pair; the page again; or nothing, once it's done or stopped. The program
 //! goes on answering until the Shortcut has heard that, for [`LINGER`] at
@@ -79,6 +79,9 @@ const HOLD: Duration = Duration::from_secs(12);
 /// What Pair says once you've been to Settings, if the page comes back
 /// before it's paired.
 const NOT_YET: &str = "Not paired yet. Tap Done to go back to Settings and finish pairing.";
+/// The Install Atelier Shortcut's first version that shows the page in its
+/// own web view, over rootshell. Before it, the Shortcut opened Safari.
+pub const WEB_VIEW: u32 = 2;
 /// How long it goes on answering, once it's done, for the Shortcut to hear
 /// so when you close its web view: rootshell stays in front meanwhile.
 const LINGER: Duration = Duration::from_secs(600);
@@ -311,9 +314,11 @@ fn with<T>(f: impl FnOnce(&mut Page) -> T) -> Option<T> {
     PAGE.with_borrow_mut(|page| page.as_mut().map(f))
 }
 
-/// Starts serving the page at `address`: in the Shortcut's web view with
-/// `web_view`, or else in Safari.
-pub fn start(address: &Address, web_view: bool) -> Result<(), Stop> {
+/// Starts serving the page at `address`, for the Install Atelier Shortcut's
+/// version `shortcut`: in its web view from [`WEB_VIEW`] on, or else in
+/// Safari.
+pub fn start(address: &Address, shortcut: u32) -> Result<(), Stop> {
+    let web_view = shortcut >= WEB_VIEW;
     let page = Page::open(address, web_view).map_err(|error| {
         terminal::log(format!("the page's port: {error}"));
         Stop::new(format!("Couldn't serve the page at port {}", address.port))
@@ -325,7 +330,7 @@ pub fn start(address: &Address, web_view: bool) -> Result<(), Stop> {
         address.port, address.key
     );
     terminal::log(format!(
-        "the page: port {}, in {}, {} s in",
+        "the page: port {}, Shortcut version {shortcut}, in {}, {} s in",
         address.port,
         if web_view {
             "the Shortcut's web view"
