@@ -108,6 +108,8 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
   --pairing-to <path> where the app takes this iPhone's pairing, in its
                       container, when its Info.plist doesn't say (it's asked)
   --redo              sign the IPA anew, where a run that stopped would go on
+  --web-view          with --page: the Shortcut shows the page in its own web
+                      view, over rootshell, and asks what's next when it closes
   --other-apple-id    ask for the Apple ID, where the program would sign in
                       with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
@@ -126,6 +128,8 @@ struct Options {
     pairing_to: Option<String>,
     /// The page to ask on, in place of the terminal (page.rs).
     page: Option<page::Address>,
+    /// Whether the Shortcut shows the page in its web view, not Safari.
+    web_view: bool,
     redo: bool,
     check: bool,
     sign_in: bool,
@@ -146,6 +150,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             "--other-apple-id" => options.other_apple_id = true,
             "--forget" => options.forget = true,
             "--redo" => options.redo = true,
+            "--web-view" => options.web_view = true,
             "--ipa" => options.ipa = Some(value("--ipa")?),
             "--sha256" => {
                 let digest = value("--sha256")?;
@@ -180,6 +185,9 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             "--page" => options.page = Some(page::Address::parse(&value("--page")?)?),
             other => return Err(format!("`{other}` isn't an option")),
         }
+    }
+    if options.web_view && options.page.is_none() {
+        return Err("--web-view goes with --page".into());
     }
     if options.page.is_some()
         && (options.ipa.is_some()
@@ -234,7 +242,7 @@ fn main() -> ExitCode {
         }
         prepare(&state);
         if let Some(address) = &options.page {
-            page::start(address)?;
+            page::start(address, options.web_view)?;
             terminal::no_notifications();
             page::wait_for_visit()?;
         }
@@ -1214,6 +1222,9 @@ mod tests {
             arguments.extend_from_slice(against);
             assert!(options(&arguments).is_err(), "{against:?}");
         }
+        assert!(options(&["--page", PAGE, "--web-view"]).unwrap().web_view);
+        assert!(!options(&["--page", PAGE]).unwrap().web_view);
+        assert!(options(&["--web-view"]).is_err());
         assert!(
             options(&[
                 "--page",

@@ -125,9 +125,10 @@ pub fn pair(state: &State, address: Option<&str>) -> Result<Pairing, Stop> {
         "  2. Scroll down and tap \"Pair with {DISPLAY_NAME}\"."
     ));
     terminal::say("  3. Enter your passcode, then the code that will show here.");
-    // With the page, the Shortcut keeps rootshell going: it brings it to
-    // the front whenever the program has no news for it (`page.rs`).
-    if !page::on() {
+    // In the Shortcut's web view, the Shortcut keeps rootshell going: it
+    // brings it to the front whenever the program has no news for it
+    // (`page.rs`).
+    if !page::in_web_view() {
         terminal::say("Leave rootshell running meanwhile. It keeps going behind Settings");
         if net::has_177_calls() {
             terminal::say("with Location Diary Mode on, in its Settings › General.");

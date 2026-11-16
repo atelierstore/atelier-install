@@ -19,7 +19,9 @@ it: asks the page over HTTP, as the page's script does, reads the code it
 shows before the phone connects, pairs the phone on it, answers its
 question about LocalDevVPN, and reads why it stopped at the tunnel. And
 checks that the page answers nobody without its key or under another name,
-and that the key isn't in the log.
+and that the key isn't in the log. In the Shortcut's web view
+(--web-view), what the Shortcut hears when you close it, and that the
+program goes on until the Shortcut has heard it's over.
 
     cargo build --release --target wasm32-wasip1
     cargo build -p atelier-testphone
@@ -404,6 +406,12 @@ class Page:
         check(status == 200, f"the pairing's news: {status} {body!r}")
         return json.loads(body)
 
+    def closed(self):
+        """What the Shortcut does once you close its web view."""
+        status, body = self.ask("GET", "/closed", headers={"X-Atelier-Key": self.key})
+        check(status == 200, f"what's next: {status} {body!r}")
+        return json.loads(body)
+
     def pairing_later(self, known):
         """The same, asked in the background, as the Shortcut waits while
         the person is in Settings: a queue that gets its news."""
@@ -428,14 +436,15 @@ def page(address, closed):
     observer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     observer.bind(("127.0.0.1", 0))
     observer.settimeout(30)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed,
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--web-view", "--port", closed,
                       mdns_port=observer.getsockname()[1])
     page = Page(port, key)
 
     # Its files to anyone, its state only with the key, and nothing under
-    # another name.
+    # another name. In the Shortcut's web view, with the web view's wording.
     status, html = page.ask("GET", "/")
     check(status == 200 and b"Pair your iPhone with Atelier" in html, f"the page: {status}", program)
+    check(b'<html lang="en" class="web-view">' in html, "the page without the web view's wording", program)
     check(page.ask("GET", "/state")[0] == 403, "the state without the key", program)
     check(page.ask("GET", "/state", headers={"X-Atelier-Key": key[:-1] + "x"})[0] == 403,
           "the state with another key", program)
@@ -471,8 +480,9 @@ def page(address, closed):
     packet, _ = observer.recvfrom(4096)
     record = dnslib.DNSRecord.parse(packet)
     srv = next(a for a in record.rr if dnslib.QTYPE[a.rtype] == "SRV")
-    # The person taps Done and goes to Settings: the Shortcut asks how
-    # pairing goes, and hears when Settings asks for the code.
+    # The person taps Done: the Shortcut hears to open Settings, and asks
+    # how pairing goes, and hears when Settings asks for the code.
+    check(page.closed() == {"screen": "pair", "next": "settings"}, "Done on Pair", program)
     waiting = page.pairing_later("waiting")
     time.sleep(1)
     check(waiting.empty(), "the Shortcut's question was answered before there was news", program)
@@ -514,8 +524,13 @@ def page(address, closed):
     state = page.wait_for("stopped", program, seen)
     check(f"pairing service didn't answer at port {closed}" in state["view"]["what"],
           f"why it stopped: {state}", program)
+    # In the web view, it goes on until the Shortcut hears it's over.
+    time.sleep(2)
+    check(program.process.poll() is None, "it ended before the Shortcut heard so", program)
+    check(page.closed() == {"screen": "stopped", "next": "stop"}, "Done once it stopped", program)
     status, said = program.end()
     check(status == 1, f"the run with the page ended with {status}:\n{said}")
+    check("Location Diary" not in said, f"in the web view, it spoke of Location Diary Mode:\n{said}")
     with open(os.path.join(folder, "atelier-install.log")) as log:
         logged = log.read()
     check(key not in logged and f"the page: port {port}" in logged, "the log and the page's key")
@@ -524,6 +539,7 @@ def page(address, closed):
     print("ok  it asks for LocalDevVPN when ifconfig.txt doesn't list it, then stops at the tunnel and says why")
     print("ok  the page's key is in the terminal, never in the log")
     print("ok  with the page, rootshell posts no notifications")
+    print("ok  in the web view, it goes on until the Shortcut hears it's over, and needs no Location Diary Mode")
 
     # With the pairing kept and LocalDevVPN listed, it goes straight on, to
     # the port Bonjour gives, as the Shortcut gives none.
@@ -533,6 +549,9 @@ def page(address, closed):
     program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}",
                       rootshell=bonjour((closed, address)))
     page = Page(port, key)
+    # In Safari, as an older Shortcut opens it: Safari's wording.
+    status, html = page.ask("GET", "/")
+    check(status == 200 and b'<html lang="en">' in html, "the page in Safari had the web view's wording", program)
     seen = []
     state = page.wait_for("stopped", program, seen)
     check("pair" not in seen and "question" not in seen, f"the page showed {seen}", program)
@@ -549,17 +568,20 @@ def page(address, closed):
     with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
         ifconfig.write(IFCONFIG.format(address=address))
     port = random.randint(20000, 29999)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--web-view", "--port", closed)
     page = Page(port, key)
     page.wait_for("pair", program)
     check(page.ask("POST", "/stop", body=b"")[0] == 403, "a stop without the key", program)
     status, body = page.ask("POST", "/stop", body=b"", headers={"X-Atelier-Key": key})
     check(status == 200 and json.loads(body)["view"]["screen"] == "ended",
           f"the stop's answer: {status} {body!r}", program)
+    time.sleep(1)
+    check(program.process.poll() is None, "stopped from the web view, it ended before the Shortcut heard so", program)
+    check(page.closed() == {"screen": "ended", "next": "stop"}, "Done once stopped", program)
     status, said = program.end()
     check(status == 0 and "Stopped from the page" in said,
           f"after the page's stop, it said ({status}):\n{said}")
-    print("ok  the page's Stop ends the installer, after answering with the ended screen")
+    print("ok  the page's Stop ends the installer, after answering with the ended screen, and the Shortcut")
     shutil.rmtree(folder)
 
 

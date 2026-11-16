@@ -28,6 +28,14 @@
 //! Settings asks for the code, the Shortcut shows it in a notification;
 //! once paired, it opens rootshell and the page again; and on no news, it
 //! opens rootshell for a moment, which gives it another 25 seconds.
+//!
+//! The Shortcut says so with `--web-view`: an older Install Atelier
+//! Shortcut opens the page in Safari, and needs Location Diary Mode, so the
+//! page keeps Safari's wording for it. In the web view, each time you close
+//! it with Done, the Shortcut asks what's next at `/closed`: Settings, for
+//! Pair; the page again; or nothing, once it's done or stopped. The program
+//! goes on answering until the Shortcut has heard that, for [`LINGER`] at
+//! most, so closing the last screen doesn't end the Shortcut on an error.
 
 mod http;
 
@@ -49,6 +57,10 @@ const SCRIPT: &[u8] = include_bytes!("page/page.js");
 const ICON: &[u8] = include_bytes!("page/icon.png");
 /// Bricolage Grotesque, the website's, for the headings (`page/OFL.txt`).
 const FONT: &[u8] = include_bytes!("page/display.woff2");
+/// The page's root element, and the same in the web view, whose wording it
+/// then shows (`page.css`).
+const HTML: &str = r#"<html lang="en">"#;
+const WEB_VIEW_HTML: &str = r#"<html lang="en" class="web-view">"#;
 
 const TEXT: &str = "text/plain; charset=utf-8";
 const JSON: &str = "application/json";
@@ -67,6 +79,12 @@ const HOLD: Duration = Duration::from_secs(12);
 /// What Pair says once you've been to Settings, if the page comes back
 /// before it's paired.
 const NOT_YET: &str = "Not paired yet. Tap Done to go back to Settings and finish pairing.";
+/// How long it goes on answering, once it's done, for the Shortcut to hear
+/// so when you close its web view: rootshell stays in front meanwhile.
+const LINGER: Duration = Duration::from_secs(600);
+/// How long without answering the page, as it works, before the log says
+/// so: rootshell may have paused behind another app.
+const QUIET: Duration = Duration::from_secs(8);
 
 /// The page's address, as the Shortcut makes it: `http://127.0.0.1:PORT/#KEY`.
 #[derive(Clone, PartialEq, Eq)]
@@ -293,9 +311,10 @@ fn with<T>(f: impl FnOnce(&mut Page) -> T) -> Option<T> {
     PAGE.with_borrow_mut(|page| page.as_mut().map(f))
 }
 
-/// Starts serving the page at `address`.
-pub fn start(address: &Address) -> Result<(), Stop> {
-    let page = Page::open(address).map_err(|error| {
+/// Starts serving the page at `address`: in the Shortcut's web view with
+/// `web_view`, or else in Safari.
+pub fn start(address: &Address, web_view: bool) -> Result<(), Stop> {
+    let page = Page::open(address, web_view).map_err(|error| {
         terminal::log(format!("the page's port: {error}"));
         Stop::new(format!("Couldn't serve the page at port {}", address.port))
             .next("Run the Shortcut again: it picks another port each time.")
@@ -306,8 +325,13 @@ pub fn start(address: &Address) -> Result<(), Stop> {
         address.port, address.key
     );
     terminal::log(format!(
-        "the page: port {}, {} s in",
+        "the page: port {}, in {}, {} s in",
         address.port,
+        if web_view {
+            "the Shortcut's web view"
+        } else {
+            "Safari"
+        },
         terminal::seconds()
     ));
     PAGE.set(Some(page));
@@ -317,6 +341,12 @@ pub fn start(address: &Address) -> Result<(), Stop> {
 /// Whether the program has a page to show.
 pub fn on() -> bool {
     PAGE.with_borrow(Option::is_some)
+}
+
+/// Whether the page shows in the Shortcut's web view, which keeps rootshell
+/// in front: without Location Diary Mode.
+pub fn in_web_view() -> bool {
+    with(|page| page.web_view).unwrap_or(false)
 }
 
 /// Waits for Safari to have the page, answering it meanwhile: with the page,
@@ -366,7 +396,15 @@ pub fn bar(fraction: f64, text: impl Into<String>) {
 /// works.
 pub fn tick() {
     with(|page| {
-        if page.served.elapsed() >= TICK {
+        let quiet = page.served.elapsed();
+        if quiet >= QUIET {
+            terminal::log(format!(
+                "the page: {} s without answering, {} s in",
+                quiet.as_secs(),
+                terminal::seconds()
+            ));
+        }
+        if quiet >= TICK {
             page.serve_waiting();
         }
     });
@@ -426,11 +464,18 @@ fn stopped_view(stop: &Stop) -> View {
 }
 
 /// Before the program ends: answers the page until it has the last view,
-/// for [`LAST`] at most, as it may have been closed.
+/// for [`LAST`] at most, as it may have been closed, and in the web view,
+/// the Shortcut until it has heard it's over, for [`LINGER`] at most.
 pub fn end() {
     with(|page| {
-        let until = Instant::now() + LAST;
-        while page.fetched < page.seq && Instant::now() < until && !page.failed {
+        let started = Instant::now();
+        loop {
+            let waited = started.elapsed();
+            let for_page = page.fetched < page.seq && waited < LAST;
+            let for_shortcut = page.web_view && !page.told_over && waited < LINGER;
+            if page.failed || !(for_page || for_shortcut) {
+                break;
+            }
             page.serve_waiting();
             std::thread::sleep(Duration::from_millis(200));
         }
@@ -467,10 +512,18 @@ struct Page {
     /// Whether the Shortcut has waited on pairing since Pair showed: you
     /// went to Settings.
     in_settings: bool,
+    /// Whether the page shows in the Shortcut's web view, rather than
+    /// Safari.
+    web_view: bool,
+    /// Whether the Shortcut has heard, when the web view closed, that it's
+    /// over.
+    told_over: bool,
+    /// Whether it goes on answering, stopped from the page, before it ends.
+    lingering: bool,
 }
 
 impl Page {
-    fn open(address: &Address) -> std::io::Result<Page> {
+    fn open(address: &Address, web_view: bool) -> std::io::Result<Page> {
         Ok(Page {
             door: Door::open(address.port)?,
             port: address.port,
@@ -491,6 +544,9 @@ impl Page {
             pairing: Pairing::None,
             held: Vec::new(),
             in_settings: false,
+            web_view,
+            told_over: false,
+            lingering: false,
         })
     }
 
@@ -566,6 +622,7 @@ impl Page {
     }
 
     fn serve(&mut self, mut visitor: Visitor) {
+        self.served = Instant::now();
         // It had its time (door::FIRST_WAIT), as a connection Safari
         // opens ahead of a request can take.
         if visitor.said_nothing() {
@@ -593,8 +650,21 @@ impl Page {
         };
         let _ = visitor.write_all(&reply);
         drop(visitor);
-        if self.ending {
+        // Once: what it answers while it lingers comes back here.
+        if self.ending && !self.lingering {
+            self.lingering = true;
+            self.linger();
             end_from_page();
+        }
+    }
+
+    /// Stopped from the page, in the web view: answers until the Shortcut
+    /// has heard it's over, for [`LINGER`] at most.
+    fn linger(&mut self) {
+        let started = Instant::now();
+        while self.web_view && !self.told_over && !self.failed && started.elapsed() < LINGER {
+            self.serve_waiting();
+            std::thread::sleep(Duration::from_millis(200));
         }
     }
 
@@ -644,7 +714,7 @@ impl Page {
             return file(JSON, &self.pairing_news(known));
         }
         match (request.method.as_str(), path) {
-            ("GET", "/") => file("text/html; charset=utf-8", INDEX),
+            ("GET", "/") => file("text/html; charset=utf-8", &self.index()),
             ("GET", "/page.css") => file("text/css; charset=utf-8", STYLE),
             ("GET", "/page.js") => file("text/javascript; charset=utf-8", SCRIPT),
             ("GET", "/icon.png") => file("image/png", ICON),
@@ -652,6 +722,10 @@ impl Page {
             ("GET", "/state") | ("POST", "/answer") | ("POST", "/stop") if !keyed => {
                 http::answer("403 Forbidden", TEXT, b"Only the page asks this.\n")
             }
+            (_, "/closed") if request.method != "GET" || !keyed => {
+                http::answer("403 Forbidden", TEXT, b"Only the Shortcut asks this.\n")
+            }
+            ("GET", "/closed") => file(JSON, &self.closed()),
             ("GET", "/state") => {
                 if !self.visited {
                     self.visited = true;
@@ -688,6 +762,40 @@ impl Page {
             }
             _ => http::answer("404 Not Found", TEXT, b"Nothing here.\n"),
         }
+    }
+
+    /// The page, in the web view's wording or Safari's (`page/index.html`).
+    fn index(&self) -> Vec<u8> {
+        let index = String::from_utf8_lossy(INDEX);
+        let index = if self.web_view {
+            index.replacen(HTML, WEB_VIEW_HTML, 1)
+        } else {
+            index.into_owned()
+        };
+        index.into_bytes()
+    }
+
+    /// What the Shortcut does now that you closed its web view: `settings`
+    /// to pair, `show` the page again, or `stop`, once it's done or
+    /// stopped, as nothing's left to show.
+    fn closed(&mut self) -> Vec<u8> {
+        let next = match &self.view {
+            View::Done { .. } | View::Stopped { .. } | View::Ended => "stop",
+            View::Pair { .. } if self.pairing.going() => "settings",
+            _ => "show",
+        };
+        self.told_over = next == "stop";
+        let screen = serde_json::to_value(&self.view)
+            .ok()
+            .and_then(|view| view["screen"].as_str().map(str::to_string))
+            .unwrap_or_default();
+        terminal::log(format!(
+            "the page: web view closed on {screen}, next {next}, {} s in",
+            terminal::seconds()
+        ));
+        json!({ "screen": screen, "next": next })
+            .to_string()
+            .into_bytes()
     }
 
     /// The state, as the page reads it.
@@ -749,7 +857,14 @@ impl Page {
             .partition(|held| held.known != self.pairing || now >= held.until);
         self.held = kept;
         for mut held in due {
-            let reply = http::answer("200 OK", JSON, &self.pairing_news(Some(held.known)));
+            let news = self.pairing_news(Some(held.known));
+            terminal::log(format!(
+                "the page: pairing {} after {} s, {} s in",
+                self.pairing.name(),
+                (now + HOLD).saturating_duration_since(held.until).as_secs(),
+                terminal::seconds()
+            ));
+            let reply = http::answer("200 OK", JSON, &news);
             let _ = held.visitor.write_all(&reply);
         }
     }
@@ -831,6 +946,9 @@ mod tests {
             pairing: Pairing::None,
             held: Vec::new(),
             in_settings: false,
+            web_view: false,
+            told_over: false,
+            lingering: false,
         }
     }
 
@@ -1039,6 +1157,135 @@ mod tests {
         let heard = news(sent);
         assert_eq!(heard["pairing"], "none");
         assert_eq!(heard["changed"], true);
+    }
+
+    #[test]
+    fn the_web_view_has_its_own_wording() {
+        assert_eq!(String::from_utf8_lossy(INDEX).matches(HTML).count(), 1);
+        let mut page = page();
+        let (_, safari) = get(&mut page, "/", None);
+        assert!(safari.contains(HTML) && !safari.contains(WEB_VIEW_HTML));
+        page.web_view = true;
+        let (_, web_view) = get(&mut page, "/", None);
+        assert!(web_view.contains(WEB_VIEW_HTML));
+        assert!(!web_view.contains(HTML));
+    }
+
+    fn closed(page: &mut Page) -> Value {
+        let (status, body) = get(page, "/closed", Some(KEY));
+        assert_eq!(status, "HTTP/1.1 200 OK");
+        serde_json::from_str(&body).unwrap()
+    }
+
+    #[test]
+    fn the_shortcut_hears_whats_next_when_its_web_view_closes() {
+        let mut page = page();
+        page.web_view = true;
+        assert_eq!(get(&mut page, "/closed", None).0, "HTTP/1.1 403 Forbidden");
+        assert_eq!(
+            closed(&mut page),
+            json!({ "screen": "busy", "next": "show" })
+        );
+        on_pair(&mut page);
+        assert_eq!(
+            closed(&mut page),
+            json!({ "screen": "pair", "next": "settings" })
+        );
+        page.set(
+            View::SignIn {
+                password: true,
+                problem: None,
+            },
+            false,
+        );
+        assert_eq!(
+            closed(&mut page),
+            json!({ "screen": "sign-in", "next": "show" })
+        );
+        assert!(!page.told_over);
+        page.set(
+            View::Done {
+                release: "Atelier 1.0".into(),
+                handed: true,
+            },
+            false,
+        );
+        assert_eq!(
+            closed(&mut page),
+            json!({ "screen": "done", "next": "stop" })
+        );
+        assert!(page.told_over);
+    }
+
+    #[test]
+    fn in_the_web_view_it_ends_once_the_shortcut_has_heard_so() {
+        let done = View::Done {
+            release: "Atelier 1.0".into(),
+            handed: true,
+        };
+        // In Safari, once the page has the last view.
+        let mut page = page();
+        page.set(done.clone(), false);
+        page.fetched = page.seq;
+        PAGE.set(Some(page));
+        let started = Instant::now();
+        end();
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        // In the web view, once the Shortcut has heard it's over too.
+        let mut page = super::tests::page();
+        page.web_view = true;
+        page.set(done, false);
+        page.fetched = page.seq;
+        let port = page.port;
+        let sent = browser(
+            port,
+            format!(
+                "GET /closed HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Atelier-Key: {KEY}\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        PAGE.set(Some(page));
+        end();
+        assert_eq!(with(|page| page.told_over), Some(true));
+        let (_, body) = read_answer(sent);
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["next"],
+            "stop"
+        );
+        PAGE.set(None);
+    }
+
+    #[test]
+    fn stopped_from_the_page_in_the_web_view_it_waits_for_the_shortcut() {
+        let mut page = page();
+        page.web_view = true;
+        on_pair(&mut page);
+        let port = page.port;
+        let stop = browser(
+            port,
+            format!("POST /stop HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Atelier-Key: {KEY}\r\nContent-Length: 0\r\n\r\n")
+                .as_bytes(),
+        );
+        let closed = browser(
+            port,
+            format!(
+                "GET /closed HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Atelier-Key: {KEY}\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        page.serve_waiting();
+        assert!(page.ending && page.lingering && page.told_over);
+        let (_, body) = read_answer(stop);
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap()["view"]["screen"],
+            "ended"
+        );
+        let (_, body) = read_answer(closed);
+        assert_eq!(
+            serde_json::from_str::<Value>(&body).unwrap(),
+            json!({ "screen": "ended", "next": "stop" })
+        );
     }
 
     #[test]

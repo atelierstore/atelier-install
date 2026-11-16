@@ -68,6 +68,9 @@
 }
 
 [hidden] { display: none !important; }
+/* The Shortcut's web view and Safari each have their own wording: the
+   program marks the page with the web-view class for the first (page.rs). */
+html:not(.web-view) [data-in="web-view"], html.web-view [data-in="safari"] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
