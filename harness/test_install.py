@@ -480,7 +480,7 @@ def page(address, closed):
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     check(phone.stdout.readline().strip() == "code?", "the phone didn't get to the code", program)
     news = waiting.get(timeout=10)
-    check(news == {"pairing": "asked", "changed": True, "code": code,
+    check(news == {"pairing": "asked", "changed": True, "next": "notify", "code": code,
                    "notice": f"Code for Settings: {code[:3]} {code[3:]}"},
           f"when Settings asked for the code, the Shortcut heard {news}", program)
     print("ok  the Shortcut hears the moment Settings asks for the code, with the notification's words")
@@ -491,7 +491,7 @@ def page(address, closed):
     started = time.monotonic()
     news = page.pairing("asked")
     took = time.monotonic() - started
-    check(news == {"pairing": "asked", "changed": False, "code": code,
+    check(news == {"pairing": "asked", "changed": False, "next": "refresh", "code": code,
                    "notice": f"Code for Settings: {code[:3]} {code[3:]}"} and 11 <= took < 16,
           f"with no news, the Shortcut heard {news} after {took:.1f} s", program)
     print(f"ok  while the phone waits for the code, it answers the page, and the Shortcut hears of no news after {took:.0f} s")
@@ -502,7 +502,7 @@ def page(address, closed):
     phone.stdout.read()
     check(phone.wait(timeout=30) == 0, f"the phone didn't pair on the page's code: {phone.stderr.read()}", program)
     news = paired.get(timeout=10)
-    check(news == {"pairing": "paired", "changed": True}, f"once paired, the Shortcut heard {news}", program)
+    check(news == {"pairing": "paired", "changed": True, "next": "return"}, f"once paired, the Shortcut heard {news}", program)
     print("ok  the page shows the code before the phone asks, the phone pairs on it, and the Shortcut hears so")
 
     # Without LocalDevVPN in ifconfig.txt, the page asks for it.

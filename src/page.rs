@@ -703,12 +703,23 @@ impl Page {
     }
 
     /// How pairing goes, for the Shortcut: whether it changed from what the
-    /// Shortcut `known`, and, once Settings asks for it, the code and the
-    /// notification's words.
+    /// Shortcut `known`, what the Shortcut does next, and, once Settings
+    /// asks for it, the code and the notification's words. Next is
+    /// `notify` (show the notice, then ask again), `refresh` (no news:
+    /// bring rootshell to the front for a moment, then ask again), `ask`
+    /// (ask again) or `return` (bring back rootshell and the page).
     fn pairing_news(&self, known: Option<Pairing>) -> Vec<u8> {
+        let changed = known != Some(self.pairing);
+        let next = match self.pairing {
+            Pairing::None | Pairing::Paired => "return",
+            _ if !changed => "refresh",
+            Pairing::Asked => "notify",
+            Pairing::Waiting => "ask",
+        };
         let mut news = json!({
             "pairing": self.pairing.name(),
-            "changed": known != Some(self.pairing),
+            "changed": changed,
+            "next": next,
         });
         if self.pairing == Pairing::Asked
             && let View::Pair { code, .. } = &self.view
@@ -944,6 +955,7 @@ mod tests {
         let heard = news(sent);
         assert_eq!(heard["pairing"], "asked");
         assert_eq!(heard["changed"], true);
+        assert_eq!(heard["next"], "notify");
         assert_eq!(heard["code"], "482913");
         assert_eq!(heard["notice"], "Code for Settings: 482 913");
 
@@ -953,6 +965,7 @@ mod tests {
         let heard = news(sent);
         assert_eq!(heard["pairing"], "paired");
         assert_eq!(heard["changed"], true);
+        assert_eq!(heard["next"], "return");
         assert!(heard.get("code").is_none());
         // Nothing left to wait for.
         let heard = news(ask_pairing(&mut page, "paired", KEY));
@@ -973,6 +986,7 @@ mod tests {
         let heard = news(sent);
         assert_eq!(heard["pairing"], "waiting");
         assert_eq!(heard["changed"], false);
+        assert_eq!(heard["next"], "refresh");
         assert!(heard.get("notice").is_none());
     }
 
@@ -983,10 +997,12 @@ mod tests {
         let heard = news(ask_pairing(&mut page, "waiting", KEY));
         assert_eq!(heard["pairing"], "none");
         assert_eq!(heard["changed"], true);
+        assert_eq!(heard["next"], "return");
         on_pair(&mut page);
         let heard = news(ask_pairing(&mut page, "none", KEY));
         assert_eq!(heard["pairing"], "waiting");
         assert_eq!(heard["changed"], true);
+        assert_eq!(heard["next"], "ask");
         let heard = get(&mut page, "/pairing", Some(KEY)).1;
         let heard: Value = serde_json::from_str(&heard).unwrap();
         assert_eq!(heard["pairing"], "waiting");
