@@ -1,15 +1,16 @@
 <!doctype html>
 <!--
   The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs),
-  in the Install Atelier Shortcut's web view over rootshell. An older Shortcut
-  opens it in Safari: data-in marks the wording of each (page.css), as the
-  program adds the web-view class with --web-view.
+  in the Install Atelier Shortcut's web view over rootshell. An earlier
+  Shortcut, which opens it in Safari, only gets the earlier-shortcut screen:
+  data-in marks the lede of each (page.css), as the program adds the web-view
+  class from the Shortcut's version 2 on (--shortcut).
   It carries on from atelierstore.app/apple-id, as the same page: the
   website's header, its four steps with the first two done, and step 3
   holding the installer's screens. Done moves into step 4. As the mockups
   Alex approved: the screens of 13 Nov 2026, the states drawn after them,
-  the one-page journey of 14 Nov, and the web view's wording of 15 Nov,
-  without Location Diary Mode.
+  the one-page journey of 14 Nov, the web view's wording of 15 Nov,
+  without Location Diary Mode, and the earlier Shortcut's screen of 16 Nov.
 -->
 <html lang="en">
 <head>
@@ -45,7 +46,7 @@
         <div data-part="open">
           <h3>Install Atelier</h3>
           <ol class="stepper" id="stepper"><li>Pair</li><li>Sign in</li><li>Install</li></ol>
-          <p class="lost" id="lost" hidden><span data-in="web-view">The installer isn't answering. If it stays this way, tap Done: rootshell's terminal, behind this page, says why.</span><span data-in="safari">The installer isn't answering. If it stays this way, open rootshell: its terminal says why.</span></p>
+          <p class="lost" id="lost" hidden>The installer isn't answering. If it stays this way, tap Done: rootshell's terminal, behind this page, says why.</p>
           <div class="card" id="card"><p class="wait">Waiting for the installer</p></div>
           <!-- Until it's installed or stopped: asks first, in place, then
                ends the installer as Control-C does. -->
@@ -93,16 +94,12 @@
   <h2>Pair your iPhone with Atelier</h2>
   <p>This lets Atelier install apps on this iPhone. You do it once.</p>
   <ol>
-    <li data-in="web-view">Tap <strong>Done</strong>, at the top. Settings opens.</li>
-    <li data-in="web-view">Go to <strong>Privacy &amp; Security › Developer Mode</strong>, scroll down and tap <strong>Pair with Atelier</strong>.</li>
-    <li data-in="web-view">Enter your passcode, then this code. A notification shows it when Settings asks.</li>
-    <li data-in="safari">Open <strong>Settings › Privacy &amp; Security › Developer Mode</strong>.</li>
-    <li data-in="safari">Scroll down and tap <strong>Pair with Atelier</strong>.</li>
-    <li data-in="safari">Enter your passcode, then this code.</li>
+    <li>Tap <strong>Done</strong>, at the top. Settings opens.</li>
+    <li>Go to <strong>Privacy &amp; Security › Developer Mode</strong>, scroll down and tap <strong>Pair with Atelier</strong>.</li>
+    <li>Enter your passcode, then this code. A notification shows it when Settings asks.</li>
   </ol>
   <div class="code"><span>Your code</span><b data-field="code"></b></div>
-  <p class="note" data-in="web-view">Once you've paired, this page comes back by itself.</p>
-  <p class="note" data-in="safari">Then come back here. The page goes on by itself.</p>
+  <p class="note">Once you've paired, this page comes back by itself.</p>
   <p class="problem" data-field="problem" hidden></p>
   <p class="wait">Waiting for Settings</p>
 </template>
@@ -122,7 +119,7 @@
 
 <template id="code">
   <h2>Enter Apple's code</h2>
-  <p data-field="sent">Apple sent a six-digit code to your devices. When this iPhone shows it, note it, then <span data-in="web-view">enter it here</span><span data-in="safari">come back here</span>.</p>
+  <p data-field="sent">Apple sent a six-digit code to your devices. When this iPhone shows it, note it, then enter it here.</p>
   <form data-form>
     <div class="digits-box">
       <input name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" aria-label="Apple's code" required>
@@ -172,8 +169,7 @@
     <li data-tick="signed" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>Signed Atelier</li>
     <li data-tick="installing" class="now" hidden>Installing it</li>
   </ul>
-  <p class="note" data-in="web-view">Stay on this page until it's done. rootshell pauses when you leave.</p>
-  <p class="note" data-in="safari">You can switch to another app meanwhile.</p>
+  <p class="note">Stay on this page until it's done. rootshell pauses when you leave.</p>
 </template>
 
 <template id="done">
@@ -203,6 +199,21 @@
   <ul class="next" data-field="next"></ul>
   <a class="btn btn-primary" href="shortcuts://run-shortcut?name=Install%20Atelier">Run the Shortcut again</a>
   <p class="note">rootshell's terminal says the same, and atelier-install.log, in rootshell's folder, has the details.</p>
+</template>
+
+<template id="earlier-shortcut">
+  <!-- Only an earlier Install Atelier Shortcut, which opens this page in
+       Safari, gets here, before anything else, and the installer stops.
+       iOS would keep both, as "Install Atelier 2", and the website runs the
+       Shortcut by its name. At #add-shortcut, its button adds it again. -->
+  <h2>Update the Install Atelier Shortcut</h2>
+  <p>This Shortcut opens the installer's page in Safari, which needs Location Diary Mode in rootshell. The new one shows the page over rootshell, with nothing to set.</p>
+  <ol>
+    <li>Open <strong>Shortcuts</strong>, touch and hold <strong>Install Atelier</strong>, then tap <strong>Delete</strong>.</li>
+    <li>Come back here and tap <strong>Get the new Shortcut</strong>. On the website, tap <strong>Install Atelier</strong> to add it, then again to run it.</li>
+  </ol>
+  <a class="btn btn-primary" href="https://atelierstore.app/apple-id#add-shortcut">Get the new Shortcut</a>
+  <p class="note">Delete this one first: iOS would keep both, and the website would run this one.</p>
 </template>
 </body>
 </html>

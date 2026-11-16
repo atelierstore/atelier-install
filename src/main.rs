@@ -108,8 +108,9 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
   --pairing-to <path> where the app takes this iPhone's pairing, in its
                       container, when its Info.plist doesn't say (it's asked)
   --redo              sign the IPA anew, where a run that stopped would go on
-  --shortcut <n>      with --page: the Install Atelier Shortcut's version; from 2
-                      on, it shows the page in its own web view, over rootshell
+  --shortcut <n>      with --page: the Install Atelier Shortcut's version, from 2;
+                      without it, the page says to delete that Shortcut and add
+                      the new one, which shows the page over rootshell
   --other-apple-id    ask for the Apple ID, where the program would sign in
                       with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
@@ -250,8 +251,12 @@ fn main() -> ExitCode {
         }
         prepare(&state);
         if let Some(address) = &options.page {
-            page::start(address, options.shortcut.unwrap_or(1))?;
+            let shortcut = options.shortcut.unwrap_or(1);
+            page::start(address, shortcut)?;
             terminal::no_notifications();
+            if shortcut < page::OLDEST {
+                return Err(earlier_shortcut());
+            }
             page::wait_for_visit()?;
         }
         let result = run(&options, &state);
@@ -280,6 +285,21 @@ fn main() -> ExitCode {
 
 /// The log, in the folder Files shows, to send along when a run fails.
 const LOG: &str = "atelier-install.log";
+
+/// An Install Atelier Shortcut older than the installer goes with: the page
+/// says to delete it and add the new one, before anything else, as iOS
+/// would keep both and the website runs the Shortcut by its name. The
+/// terminal says the same.
+fn earlier_shortcut() -> Stop {
+    terminal::log("the page: an earlier Shortcut, so it says to delete it and add the new one");
+    page::show(View::EarlierShortcut);
+    if page::wait_for_visit().is_ok() {
+        page::end();
+    }
+    Stop::new("This Install Atelier Shortcut is an earlier one: it opens the page in Safari, which needs Location Diary Mode. The new one shows it over rootshell")
+        .next("Delete this one first: in Shortcuts, touch and hold Install Atelier, then tap Delete.")
+        .next("Then add the new one at atelierstore.app/apple-id: tap Install Atelier to add it, then again to run it.")
+}
 
 /// Hands isideload what rootshell has in place of what it'd take from the
 /// system: connections, with rootshell's TLS, and files, with its

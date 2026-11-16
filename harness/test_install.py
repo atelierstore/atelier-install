@@ -21,7 +21,8 @@ question about LocalDevVPN, and reads why it stopped at the tunnel. And
 checks that the page answers nobody without its key or under another name,
 and that the key isn't in the log. In the Shortcut's web view
 (--shortcut 2), what the Shortcut hears when you close it, and that the
-program goes on until the Shortcut has heard it's over.
+program goes on until the Shortcut has heard it's over. And that an earlier
+Shortcut, without a version, only hears to delete it and add the new one.
 
     cargo build --release --target wasm32-wasip1
     cargo build -p atelier-testphone
@@ -546,20 +547,44 @@ def page(address, closed):
     with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
         ifconfig.write(IFCONFIG.format(address=address) + LOCAL_DEV_VPN)
     port = random.randint(20000, 29999)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}",
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2",
                       rootshell=bonjour((closed, address)))
     page = Page(port, key)
-    # In Safari, as an older Shortcut opens it: Safari's wording.
-    status, html = page.ask("GET", "/")
-    check(status == 200 and b'<html lang="en">' in html, "the page in Safari had the web view's wording", program)
     seen = []
     state = page.wait_for("stopped", program, seen)
     check("pair" not in seen and "question" not in seen, f"the page showed {seen}", program)
+    check(page.closed() == {"screen": "stopped", "next": "stop"}, "Done once it stopped", program)
     status, said = program.end()
     check(status == 1 and "LocalDevVPN was connected when the Shortcut started" in said
           and f"pairing service didn't answer at port {closed}" in said,
           f"the second run with the page said ({status}):\n{said}")
     print("ok  with the pairing kept and LocalDevVPN listed, the page goes straight on")
+
+    # An earlier Shortcut, which passes no version and opens the page in
+    # Safari: the page says to delete it and add the new one, before
+    # anything else, and the program stops. The terminal says the same.
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}",
+                      rootshell=bonjour((closed, address)))
+    page = Page(port, key)
+    status, html = page.ask("GET", "/")
+    check(status == 200 and b'<html lang="en">' in html and b'<template id="earlier-shortcut">' in html,
+          "the page for an earlier Shortcut, in Safari", program)
+    seen = []
+    page.wait_for("earlier-shortcut", program, seen)
+    check(seen == ["earlier-shortcut"], f"for an earlier Shortcut, the page showed {seen}", program)
+    status, said = program.end()
+    check(status == 1 and "This Install Atelier Shortcut is an earlier one" in said
+          and "touch and hold Install Atelier, then tap Delete" in said
+          and "atelierstore.app/apple-id" in said and "LocalDevVPN" not in said,
+          f"for an earlier Shortcut, it said ({status}):\n{said}")
+    with open(os.path.join(folder, "atelier-install.log")) as log:
+        logged = log.read()
+    check("Shortcut version 1, in Safari" in logged and "an earlier Shortcut" in logged,
+          f"the log for an earlier Shortcut:\n{logged}")
+    check("tunnel" not in logged.lower() and "LocalDevVPN" not in logged,
+          f"for an earlier Shortcut, it went on:\n{logged}")
+    print("ok  an earlier Shortcut hears to delete it and add the new one, and nothing else happens")
     shutil.rmtree(folder)
 
     # Stop the installer, from the page: it answers with the ended screen,

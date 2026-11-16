@@ -30,12 +30,16 @@
 //! opens rootshell for a moment, which gives it another 25 seconds.
 //!
 //! The Shortcut says so with its version, `--shortcut 2` and later
-//! ([`WEB_VIEW`]): version 1, which passes none, opens the page in Safari,
-//! and needs Location Diary Mode, so the page keeps Safari's wording for it. In the web view, each time you close
-//! it with Done, the Shortcut asks what's next at `/closed`: Settings, for
-//! Pair; the page again; or nothing, once it's done or stopped. The program
-//! goes on answering until the Shortcut has heard that, for [`LINGER`] at
-//! most, so closing the last screen doesn't end the Shortcut on an error.
+//! ([`WEB_VIEW`]). Version 1, which passes none, opens the page in Safari,
+//! and needs Location Diary Mode: below [`OLDEST`], the page only says to
+//! delete that Shortcut and add the new one, as iOS would keep both and the
+//! website runs the Shortcut by its name, and the program stops.
+//!
+//! In the web view, each time you close it with Done, the Shortcut asks
+//! what's next at `/closed`: Settings, for Pair; the page again; or nothing,
+//! once it's done or stopped. The program goes on answering until the
+//! Shortcut has heard that, for [`LINGER`] at most, so closing the last
+//! screen doesn't end the Shortcut on an error.
 
 mod http;
 
@@ -82,6 +86,9 @@ const NOT_YET: &str = "Not paired yet. Tap Done to go back to Settings and finis
 /// The Install Atelier Shortcut's first version that shows the page in its
 /// own web view, over rootshell. Before it, the Shortcut opened Safari.
 pub const WEB_VIEW: u32 = 2;
+/// The oldest Install Atelier Shortcut the installer goes on with. An
+/// earlier one gets [`View::EarlierShortcut`].
+pub const OLDEST: u32 = 2;
 /// How long it goes on answering, once it's done, for the Shortcut to hear
 /// so when you close its web view: rootshell stays in front meanwhile.
 const LINGER: Duration = Duration::from_secs(600);
@@ -177,6 +184,9 @@ pub enum View {
     Stopped { what: String, next: Vec<String> },
     /// Stopped from the page, by its Stop the installer.
     Ended,
+    /// The Install Atelier Shortcut is older than [`OLDEST`]: delete it,
+    /// and add the new one from the website.
+    EarlierShortcut,
 }
 
 impl View {
@@ -188,8 +198,20 @@ impl View {
             View::SignIn { .. } | View::Code { .. } => Some(1),
             View::Review { .. } | View::Installing { .. } => Some(2),
             View::Done { .. } => Some(3),
-            View::Busy { .. } | View::Question { .. } | View::Stopped { .. } | View::Ended => None,
+            View::Busy { .. }
+            | View::Question { .. }
+            | View::Stopped { .. }
+            | View::Ended
+            | View::EarlierShortcut => None,
         }
+    }
+
+    /// Whether the program ends on it: nothing's left to stop or show.
+    fn over(&self) -> bool {
+        matches!(
+            self,
+            View::Done { .. } | View::Stopped { .. } | View::Ended | View::EarlierShortcut
+        )
     }
 
     fn bar_mut(&mut self) -> Option<&mut Bar> {
@@ -756,10 +778,7 @@ impl Page {
             }
             ("POST", "/stop") => {
                 // Once it's done or stopped, there's nothing left to stop.
-                if !matches!(
-                    self.view,
-                    View::Done { .. } | View::Stopped { .. } | View::Ended
-                ) {
+                if !self.view.over() {
                     self.set(View::Ended, false);
                     self.ending = true;
                 }
@@ -785,7 +804,7 @@ impl Page {
     /// stopped, as nothing's left to show.
     fn closed(&mut self) -> Vec<u8> {
         let next = match &self.view {
-            View::Done { .. } | View::Stopped { .. } | View::Ended => "stop",
+            view if view.over() => "stop",
             View::Pair { .. } if self.pairing.going() => "settings",
             _ => "show",
         };
@@ -1174,6 +1193,29 @@ mod tests {
         let (_, web_view) = get(&mut page, "/", None);
         assert!(web_view.contains(WEB_VIEW_HTML));
         assert!(!web_view.contains(HTML));
+    }
+
+    #[test]
+    fn an_earlier_shortcut_hears_to_delete_it_and_add_the_new_one() {
+        let mut page = page();
+        page.set(View::EarlierShortcut, false);
+        let (_, html) = get(&mut page, "/", None);
+        assert!(html.contains(r#"<template id="earlier-shortcut">"#));
+        assert!(html.contains("https://atelierstore.app/apple-id#add-shortcut"));
+        let (_, body) = get(&mut page, "/state", Some(KEY));
+        let state: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(state["view"], json!({ "screen": "earlier-shortcut" }));
+        assert_eq!(state["stage"], 0);
+        // There's nothing to stop.
+        let port = page.port;
+        exchange(
+            &mut page,
+            &format!(
+                "POST /stop HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Atelier-Key: {KEY}\r\nContent-Length: 0\r\n\r\n"
+            ),
+        );
+        assert!(!page.ending);
+        assert!(matches!(page.view, View::EarlierShortcut));
     }
 
     fn closed(page: &mut Page) -> Value {

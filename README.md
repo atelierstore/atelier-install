@@ -76,7 +76,7 @@ You need:
 - iOS 27 or later, with Developer Mode on (Settings › Privacy & Security › Developer Mode).
 - Wi-Fi. iOS refuses LocalDevVPN's connections to its services over mobile data.
 - LocalDevVPN, from the App Store.
-- rootshell, from the App Store. With the Install Atelier Shortcut, on rootshell 1.0.16-177 or later, there's nothing to set from version 2 of the Shortcut on, which shows the page in its own web view (version 1 opens it in Safari, and needs Location Diary Mode, as in the terminal). In the terminal, turn on Location Diary Mode, in its Settings › General. Before rootshell 1.0.16-177, set it to Session Only, which goes off when rootshell closes, so turn it on again before a later run. From 1.0.16-177 on, Auto During Active Sessions does, and stays set. 1.0.16-177 also lets the program find the pairing service's port by itself.
+- rootshell, from the App Store. With the Install Atelier Shortcut, on rootshell 1.0.16-177 or later, there's nothing to set: the Shortcut shows the page in its own web view. In the terminal, turn on Location Diary Mode, in its Settings › General. Before rootshell 1.0.16-177, set it to Session Only, which goes off when rootshell closes, so turn it on again before a later run. From 1.0.16-177 on, Auto During Active Sessions does, and stays set. 1.0.16-177 also lets the program find the pairing service's port by itself.
 - An Apple ID. With a free one, apps open for 7 days.
 
 In rootshell, run this line:
@@ -106,14 +106,15 @@ When it pairs, tap *Pair with Atelier* in Settings › Privacy & Security › De
   --pairing-to <path> where the app takes this iPhone's pairing, in its container,
                       when its Info.plist doesn't say (it's asked)
   --redo              sign the IPA anew, where a run that stopped would go on
-  --shortcut <n>      with --page: the Install Atelier Shortcut's version; from 2 on,
-                      it shows the page in its own web view, over rootshell
+  --shortcut <n>      with --page: the Install Atelier Shortcut's version, from 2;
+                      without it, the page says to delete that Shortcut and add
+                      the new one, which shows the page over rootshell
   --other-apple-id    ask for the Apple ID, where the program would sign in
                       with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
 ```
 
-**With the Install Atelier Shortcut,** the program asks on a page of its own instead of the terminal, in the website's look. The Shortcut connects LocalDevVPN, picks a port and a key, and has rootshell run the line with `ifconfig > ifconfig.txt` and `./atelier-install.wasm --page http://127.0.0.1:PORT/#KEY --shortcut 2`, with the Shortcut's version. Then it shows that page over rootshell, in its own web view, so rootshell stays in front without Location Diary Mode. Version 1, which passes no version, opens the page in Safari instead: the page then keeps Safari's wording, and rootshell needs Location Diary Mode, as in the terminal. With `--page`, the program installs Atelier's newest release, with the link and SHA-256 that Atelier's source lists. The page shows the pairing's code before you go to Settings, and the Shortcut shows it again in a notification when Settings asks for it. It asks you to connect LocalDevVPN only when `ifconfig.txt` doesn't list it, and skips pairing when the program kept a pairing. The terminal still says everything, and the log stays as it is.
+**With the Install Atelier Shortcut,** the program asks on a page of its own instead of the terminal, in the website's look. The Shortcut connects LocalDevVPN, picks a port and a key, and has rootshell run the line with `ifconfig > ifconfig.txt` and `./atelier-install.wasm --page http://127.0.0.1:PORT/#KEY --shortcut 2`, with the Shortcut's version. Then it shows that page over rootshell, in its own web view, so rootshell stays in front without Location Diary Mode. Version 1, which passes no version, opened the page in Safari, and needed Location Diary Mode: for it, the page only says to delete that Shortcut and add the new one, before anything else, and the program stops. iOS would keep both, as "Install Atelier 2", and the website runs the Shortcut by its name. With `--page`, the program installs Atelier's newest release, with the link and SHA-256 that Atelier's source lists. The page shows the pairing's code before you go to Settings, and the Shortcut shows it again in a notification when Settings asks for it. It asks you to connect LocalDevVPN only when `ifconfig.txt` doesn't list it, and skips pairing when the program kept a pairing. The terminal still says everything, and the log stays as it is.
 
 **A run that stops picks up where it left off.** What each step makes is kept until the install is done. That covers the download and, from the signing on, the signed app and what the app takes. A run for the same IPA, by its link or its SHA-256, goes straight to the install. If the install's connection breaks, which can happen while rootshell isn't on screen, the program asks to try again. Everything kept goes once the app is installed, a day after the signing, with `--redo`, or with `--forget`. If nothing more shows within a minute, a server isn't answering. Press Control-C and run it again, and it tries that server last.
 
