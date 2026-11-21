@@ -649,6 +649,10 @@ fn install_app(
             if shown.swap(percent, Ordering::Relaxed) != percent {
                 terminal::bar(percent as f64 / 100.0, format!("{percent}%"));
                 page::bar(percent as f64 / 100.0, INSTALLING);
+            } else {
+                // As the signing does: the page, and the Shortcut when its
+                // web view closes, don't wait for the next percent.
+                page::tick();
             }
         });
         terminal::log(format!(
