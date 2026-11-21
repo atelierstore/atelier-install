@@ -119,19 +119,6 @@ pub fn say_personal(line: impl Display, logged: impl Display) {
     log(format!("  {logged}"));
 }
 
-/// A line under a step that's a link to `url` (OSC 8), which rootshell
-/// opens from the menu you get by touching and holding it. The log gets
-/// the line without the link, which can hold the page's key.
-pub fn say_link(line: impl Display, url: &str) {
-    println!("  {}", linked(&line.to_string(), url));
-    log(format!("  {line}"));
-}
-
-/// `text` as a link to `url`, in the terminal's own code for links.
-fn linked(text: &str, url: &str) -> String {
-    format!("\x1b]8;;{url}\x1b\\{text}\x1b]8;;\x1b\\")
-}
-
 /// Back to the start of the line, then the line, then nothing after it.
 /// rootshell turns a carriage return in a program's output into a new line,
 /// so the line goes back with the terminal's own code for it (CSI G).

@@ -437,8 +437,7 @@ def page(address, closed):
     observer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     observer.bind(("127.0.0.1", 0))
     observer.settimeout(30)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2",
-                      "--shortcut-name", "Install Atelier test", "--port", closed,
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed,
                       mdns_port=observer.getsockname()[1])
     page = Page(port, key)
 
@@ -539,16 +538,9 @@ def page(address, closed):
     check(key in said, "the terminal didn't say where the page is")
     check("\x1b]777;" not in said, f"it posted notifications over the page:\n{said!r}")
     print("ok  it asks for LocalDevVPN when ifconfig.txt doesn't list it, then stops at the tunnel and says why")
-    # Under Pair and the question about LocalDevVPN, a link that runs the
-    # Shortcut, by its name, with the page's address, to show the page
-    # again; the log keeps only its words.
-    again = ("\x1b]8;;shortcuts://run-shortcut?name=Install%20Atelier%20test&input=text"
-             f"&text=http%3A%2F%2F127.0.0.1%3A{port}%2F%23{key}\x1b\\"
-             "If the page closed, touch and hold this line, then tap Open Link.\x1b]8;;\x1b\\")
-    check(said.count(again) == 2, f"the terminal's link to bring the page back:\n{said!r}")
-    check("If the page closed" in logged and "shortcuts://" not in logged,
-          "the log and the link to bring the page back")
-    print("ok  under each question, the terminal links to the Shortcut by its name, to bring the page back")
+    # No link back to the Shortcut: rootshell doesn't open one (21 Nov).
+    check("\x1b]8;" not in said and "If the page closed" not in said,
+          f"a link to bring the page back:\n{said!r}")
     print("ok  the page's key is in the terminal, never in the log")
     print("ok  with the page, rootshell posts no notifications")
     print("ok  in the web view, it goes on until the Shortcut hears it's over, and needs no Location Diary Mode")
