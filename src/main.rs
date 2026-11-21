@@ -615,11 +615,15 @@ fn finish(
         kept.name
     ));
     println!();
-    println!("{} is on your Home Screen. Before it opens:", kept.name);
+    println!("{} is installed.", kept.name);
+    println!();
+    println!("Before {} opens the first time:", kept.name);
     println!("  1. Settings › General › VPN & Device Management › your Apple ID › Trust.");
-    println!("  2. Open {}.", kept.name);
+    println!("  2. Open {} from your Home Screen.", kept.name);
     println!("It opens for 7 days. This test build doesn't renew it: run it again");
     println!("before then.");
+    println!();
+    println!("You can leave rootshell now.");
     Ok(())
 }
 
