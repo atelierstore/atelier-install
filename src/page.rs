@@ -35,11 +35,14 @@
 //! delete that Shortcut and add the new one, as iOS would keep both and the
 //! website runs the Shortcut by its name, and the program stops.
 //!
-//! In the web view, each time you close it with Done, the Shortcut asks
-//! what's next at `/closed`: Settings, for Pair; the page again; or nothing,
-//! once it's done or stopped. The program goes on answering until the
-//! Shortcut has heard that, for [`LINGER`] at most, so closing the last
-//! screen doesn't end the Shortcut on an error.
+//! In the web view, each time you close it (✕, or Done before iOS 26), the
+//! Shortcut asks what's next at `/closed`: Settings, for Pair; the page
+//! again; or nothing, once it's done or stopped. The program goes on
+//! answering until the Shortcut has heard that, for [`LINGER`] at most, so
+//! closing the last screen doesn't end the Shortcut on an error. Should the
+//! Shortcut's run end before, as it can when you leave rootshell, the
+//! terminal's link under each question runs it again with the page's
+//! address, and it shows the page again ([`AGAIN`]).
 
 mod http;
 
@@ -82,7 +85,13 @@ const LAST: Duration = Duration::from_secs(30);
 const HOLD: Duration = Duration::from_secs(12);
 /// What Pair says once you've been to Settings, if the page comes back
 /// before it's paired.
-const NOT_YET: &str = "Not paired yet. Tap Done to go back to Settings and finish pairing.";
+const NOT_YET: &str = "Not paired yet. Close this page to go back to Settings and finish pairing.";
+/// The Shortcut's name, unless `--shortcut-name` says another.
+pub const SHORTCUT: &str = "Install Atelier";
+/// The terminal's line under each question in the web view: a link that
+/// runs the Shortcut again with the page's address, so it shows the page
+/// again, should its web view have gone (mockup no-location-6, 21 Nov).
+const AGAIN: &str = "If the page closed, touch and hold this line, then tap Open Link.";
 /// The Install Atelier Shortcut's first version that shows the page in its
 /// own web view, over rootshell. Before it, the Shortcut opened Safari.
 pub const WEB_VIEW: u32 = 2;
@@ -337,11 +346,11 @@ fn with<T>(f: impl FnOnce(&mut Page) -> T) -> Option<T> {
 }
 
 /// Starts serving the page at `address`, for the Install Atelier Shortcut's
-/// version `shortcut`: in its web view from [`WEB_VIEW`] on, or else in
-/// Safari.
-pub fn start(address: &Address, shortcut: u32) -> Result<(), Stop> {
+/// version `shortcut`, by the name `name`: in its web view from
+/// [`WEB_VIEW`] on, or else in Safari.
+pub fn start(address: &Address, shortcut: u32, name: &str) -> Result<(), Stop> {
     let web_view = shortcut >= WEB_VIEW;
-    let page = Page::open(address, web_view).map_err(|error| {
+    let mut page = Page::open(address, web_view).map_err(|error| {
         terminal::log(format!("the page's port: {error}"));
         Stop::new(format!("Couldn't serve the page at port {}", address.port))
             .next("Run the Shortcut again: it picks another port each time.")
@@ -361,8 +370,43 @@ pub fn start(address: &Address, shortcut: u32) -> Result<(), Stop> {
         },
         terminal::seconds()
     ));
+    if web_view {
+        page.again = Some(run_again(name, address));
+    }
     PAGE.set(Some(page));
     Ok(())
+}
+
+/// The link that runs the Shortcut `name` with the page's address as its
+/// input: the Shortcut then shows the page again, rather than starting
+/// another install.
+fn run_again(name: &str, address: &Address) -> String {
+    let page = format!("http://127.0.0.1:{}/#{}", address.port, address.key);
+    format!(
+        "shortcuts://run-shortcut?name={}&input=text&text={}",
+        url_encoded(name),
+        url_encoded(&page)
+    )
+}
+
+/// The view's screen, as the page names it.
+fn screen(view: &View) -> String {
+    serde_json::to_value(view)
+        .ok()
+        .and_then(|view| view["screen"].as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+/// `text` for a link's query, every byte but the unreserved ones as `%XX`.
+fn url_encoded(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                char::from(byte).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 /// Whether the program has a page to show.
@@ -383,7 +427,7 @@ pub fn wait_for_visit() -> Result<(), Stop> {
     if with(|page| page.visited).unwrap_or(true) {
         return Ok(());
     }
-    terminal::say("Waiting for Safari to open the page.");
+    terminal::say("Waiting for the page to open.");
     with(Page::wait_for_visit).unwrap_or(Ok(()))
 }
 
@@ -547,6 +591,9 @@ struct Page {
     told_over: bool,
     /// Whether it goes on answering, stopped from the page, before it ends.
     lingering: bool,
+    /// In the web view, the link that runs the Shortcut again to show the
+    /// page, which the terminal gives under each question.
+    again: Option<String>,
 }
 
 impl Page {
@@ -574,10 +621,17 @@ impl Page {
             web_view,
             told_over: false,
             lingering: false,
+            again: None,
         })
     }
 
     fn set(&mut self, view: View, asking: bool) {
+        if let Some(again) = &self.again
+            && (asking || matches!(view, View::Pair { .. }))
+            && screen(&view) != screen(&self.view)
+        {
+            terminal::say_link(AGAIN, again);
+        }
         if let Some(stage) = view.stage() {
             self.stage = stage;
         }
@@ -809,10 +863,7 @@ impl Page {
             _ => "show",
         };
         self.told_over = next == "stop";
-        let screen = serde_json::to_value(&self.view)
-            .ok()
-            .and_then(|view| view["screen"].as_str().map(str::to_string))
-            .unwrap_or_default();
+        let screen = screen(&self.view);
         terminal::log(format!(
             "the page: web view closed on {screen}, next {next}, {} s in",
             terminal::seconds()
@@ -973,6 +1024,7 @@ mod tests {
             web_view: false,
             told_over: false,
             lingering: false,
+            again: None,
         }
     }
 
@@ -1026,6 +1078,18 @@ mod tests {
         ] {
             assert!(Address::parse(wrong).is_err(), "{wrong}");
         }
+    }
+
+    #[test]
+    fn links_to_the_shortcut_with_the_pages_address() {
+        let address =
+            Address::parse("http://127.0.0.1:24680/#123456789987654321111111111").unwrap();
+        assert_eq!(
+            run_again("Install Atelier test", &address),
+            "shortcuts://run-shortcut?name=Install%20Atelier%20test&input=text\
+             &text=http%3A%2F%2F127.0.0.1%3A24680%2F%23123456789987654321111111111"
+        );
+        assert_eq!(url_encoded("a-b_c.d~é&"), "a-b_c.d~%C3%A9%26");
     }
 
     #[test]

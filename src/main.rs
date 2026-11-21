@@ -113,6 +113,10 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
   --shortcut <n>      with --page: the Install Atelier Shortcut's version, from 2;
                       without it, the page says to delete that Shortcut and add
                       the new one, which shows the page over rootshell
+  --shortcut-name <name>
+                      with --page: the Shortcut's name, for the terminal's link
+                      that runs it again to bring back the page; Install Atelier
+                      without it
   --other-apple-id    ask for the Apple ID, where the program would sign in
                       with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
@@ -133,6 +137,8 @@ struct Options {
     page: Option<page::Address>,
     /// The Install Atelier Shortcut's version, with the page (page.rs).
     shortcut: Option<u32>,
+    /// The Shortcut's name, when it isn't Install Atelier (page.rs).
+    shortcut_name: Option<String>,
     redo: bool,
     check: bool,
     sign_in: bool,
@@ -161,6 +167,14 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
                         .filter(|version| *version >= 1)
                         .ok_or("--shortcut takes the Shortcut's version, a number from 1 up")?,
                 );
+            }
+            "--shortcut-name" => {
+                let name = value("--shortcut-name")?;
+                if name.trim().is_empty() || name.len() > 100 || name.chars().any(char::is_control)
+                {
+                    return Err("--shortcut-name takes the Shortcut's name".into());
+                }
+                options.shortcut_name = Some(name);
             }
             "--ipa" => options.ipa = Some(value("--ipa")?),
             "--sha256" => {
@@ -199,6 +213,9 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
     }
     if options.shortcut.is_some() && options.page.is_none() {
         return Err("--shortcut goes with --page".into());
+    }
+    if options.shortcut_name.is_some() && options.page.is_none() {
+        return Err("--shortcut-name goes with --page".into());
     }
     if options.page.is_some()
         && (options.ipa.is_some()
@@ -254,7 +271,8 @@ fn main() -> ExitCode {
         prepare(&state);
         if let Some(address) = &options.page {
             let shortcut = options.shortcut.unwrap_or(1);
-            page::start(address, shortcut)?;
+            let name = options.shortcut_name.as_deref().unwrap_or(page::SHORTCUT);
+            page::start(address, shortcut, name)?;
             terminal::no_notifications();
             if shortcut < page::OLDEST {
                 return Err(earlier_shortcut());
@@ -1311,6 +1329,15 @@ mod tests {
         assert!(options(&["--page", PAGE, "--shortcut", "0"]).is_err());
         assert!(options(&["--page", PAGE, "--shortcut", "two"]).is_err());
         assert!(options(&["--shortcut", "2"]).is_err());
+        assert_eq!(
+            options(&["--page", PAGE, "--shortcut-name", "Install Atelier test"])
+                .unwrap()
+                .shortcut_name
+                .as_deref(),
+            Some("Install Atelier test")
+        );
+        assert!(options(&["--page", PAGE, "--shortcut-name", " "]).is_err());
+        assert!(options(&["--shortcut-name", "Install Atelier"]).is_err());
         assert!(
             options(&[
                 "--page",
