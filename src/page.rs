@@ -589,6 +589,9 @@ struct Page {
     /// Whether the Shortcut has heard, when the web view closed, that it's
     /// over.
     told_over: bool,
+    /// Whether the web view closed and the page hasn't asked for the state
+    /// since: the log then says when it's back.
+    away: bool,
     /// Whether it goes on answering, stopped from the page, before it ends.
     lingering: bool,
     /// In the web view, the link that runs the Shortcut again to show the
@@ -620,6 +623,7 @@ impl Page {
             in_settings: false,
             web_view,
             told_over: false,
+            away: false,
             lingering: false,
             again: None,
         })
@@ -814,7 +818,10 @@ impl Page {
                         "the page: first visit, {} s in",
                         terminal::seconds()
                     ));
+                } else if self.away {
+                    terminal::log(format!("the page: back, {} s in", terminal::seconds()));
                 }
+                self.away = false;
                 self.not_yet();
                 self.fetched = self.seq;
                 file(JSON, &self.state())
@@ -863,6 +870,7 @@ impl Page {
             _ => "show",
         };
         self.told_over = next == "stop";
+        self.away = !self.told_over;
         let screen = screen(&self.view);
         terminal::log(format!(
             "the page: web view closed on {screen}, next {next}, {} s in",
@@ -1023,6 +1031,7 @@ mod tests {
             in_settings: false,
             web_view: false,
             told_over: false,
+            away: false,
             lingering: false,
             again: None,
         }
@@ -1313,7 +1322,9 @@ mod tests {
             closed(&mut page),
             json!({ "screen": "sign-in", "next": "show" })
         );
-        assert!(!page.told_over);
+        assert!(!page.told_over && page.away);
+        get(&mut page, "/state", Some(KEY));
+        assert!(!page.away);
         page.set(
             View::Done {
                 release: "Atelier 1.0".into(),
