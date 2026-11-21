@@ -14,8 +14,11 @@
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::Path;
 
+use idevice::afc::AfcClient;
+use idevice::afc::file::FileDescriptor;
 use idevice::afc::opcode::AfcFopenMode;
 use idevice::house_arrest::HouseArrestClient;
+use idevice::installation_proxy::InstallationProxyClient;
 use idevice::lockdown::LockdownClient;
 use idevice::remote_pairing::{
     RemotePairingClient, RpPairingFile, RpPairingSocket, connect_tls_psk_tunnel_native,
@@ -23,11 +26,13 @@ use idevice::remote_pairing::{
 use idevice::rsd::RsdHandshake;
 use idevice::tcp::adapter::Adapter;
 use idevice::{IdeviceError, RsdService};
+use isideload::SideloadError;
 use rootcause::Report;
 
 use crate::blocking::{Blocking, NotReady, run};
 use crate::net;
 use crate::tunnel::Tunnel;
+use crate::upload::Upload;
 use crate::{handoff, terminal};
 
 /// Where LocalDevVPN routes connections to the iPhone itself.
@@ -41,6 +46,10 @@ const LABEL: &str = "Atelier";
 /// for it: Bonjour answers within a second or so on a Wi-Fi network.
 const SERVICE: &str = "_remotepairing._tcp";
 const LOOK_FOR: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How much of a file the upload sends at a time, as isideload's did: a
+/// try that breaks sends again at most the piece it was on.
+const PIECE: usize = 1024 * 1024;
 
 /// The most ports the program tries that Bonjour gives.
 const MOST_PORTS: usize = 8;
@@ -218,18 +227,94 @@ pub fn connect(pairing: &mut RpPairingFile, port: u16) -> Result<Phone, Problem>
 
 impl Phone {
     /// Uploads the signed app to PublicStaging and installs it, as a
-    /// developer's app: `percent` goes from 0 to 100.
+    /// developer's app: `percent` goes from 0 to 70 as it uploads, then to
+    /// 100. The upload goes on from where `upload` says a try before broke.
     pub fn install(
         &mut self,
         app: &Path,
+        upload: &mut Upload,
         percent: impl Fn(u64) + Send + Sync,
     ) -> Result<(), Report> {
-        let installing = isideload::sideload::install::install_app_rsd(
-            &mut self.tunnel,
-            &mut self.handshake,
-            app,
-            percent,
-        );
+        let (folders, files) = upload
+            .list(app)
+            .map_err(|error| rootcause::report!("reading the signed app: {error}"))?;
+        let name = app
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let staged = format!("PublicStaging/{name}");
+        let installing = async {
+            let mut afc = AfcClient::connect_rsd(&mut self.tunnel, &mut self.handshake)
+                .await
+                .map_err(SideloadError::IdeviceError)?;
+            afc.mk_dir(&staged)
+                .await
+                .map_err(SideloadError::IdeviceError)?;
+            for folder in &folders {
+                afc.mk_dir(format!("{staged}/{folder}"))
+                    .await
+                    .map_err(SideloadError::IdeviceError)?;
+            }
+            percent(upload.percent());
+            for file in &files {
+                if upload.has(file) {
+                    continue;
+                }
+                let at = format!("{staged}/{}", file.path);
+                let on_iphone = if upload.broke_in(file) {
+                    let info = afc.get_file_info(&at).await;
+                    info.ok().map(|info| info.size as u64)
+                } else {
+                    None
+                };
+                let from = upload.start(file, on_iphone);
+                let bytes = std::fs::read(&file.local).map_err(|error| {
+                    rootcause::report!("reading the signed app's {}: {error}", file.path)
+                })?;
+                if from > 0 {
+                    terminal::log(format!(
+                        "install: {} goes on from byte {from} of {}",
+                        file.path, file.len
+                    ));
+                }
+                upload.begin(file, from);
+                let mut sent = send(&mut afc, &at, &bytes, upload, &percent).await;
+                // Not the connection: the iPhone wouldn't go on with it,
+                // so it has it all again.
+                if let Err(error) = &sent
+                    && from > 0
+                    && !matches!(error, IdeviceError::Socket(_))
+                {
+                    terminal::log(format!("install: going on didn't work ({error})"));
+                    upload.begin(file, 0);
+                    sent = send(&mut afc, &at, &bytes, upload, &percent).await;
+                }
+                sent.map_err(SideloadError::IdeviceError)?;
+                upload.finished();
+            }
+
+            let mut proxy =
+                InstallationProxyClient::connect_rsd(&mut self.tunnel, &mut self.handshake)
+                    .await
+                    .map_err(SideloadError::IdeviceError)?;
+            upload.handed_over();
+            let options = plist::Dictionary::from_iter([(
+                "PackageType".to_string(),
+                plist::Value::String("Developer".into()),
+            )]);
+            proxy
+                .install_with_callback(
+                    staged,
+                    Some(plist::Value::Dictionary(options)),
+                    async |(installed, _)| {
+                        percent(70 + installed * 30 / 100);
+                    },
+                    (),
+                )
+                .await
+                .map_err(SideloadError::IdeviceError)?;
+            Ok::<(), Report>(())
+        };
         run(installing).unwrap_or_else(|NotReady| {
             Err(rootcause::report!(
                 "the install waited for something rootshell's programs don't have, such as a timer"
@@ -257,6 +342,52 @@ impl Phone {
             "it waited for something rootshell's programs don't have, such as a timer".into(),
         )))
     }
+}
+
+/// Writes `bytes` at `at`, from where `upload` says the file going
+/// starts, a piece at a time, and moves the bar as the iPhone writes each:
+/// what was there after that goes.
+async fn send(
+    afc: &mut AfcClient,
+    at: &str,
+    bytes: &[u8],
+    upload: &mut Upload,
+    percent: &impl Fn(u64),
+) -> Result<(), IdeviceError> {
+    let from = upload.going_from();
+    let mode = if from > 0 {
+        AfcFopenMode::Append
+    } else {
+        AfcFopenMode::WrOnly
+    };
+    let mut handle = afc.open(at, mode).await?;
+    match write_from(&mut handle, bytes, from, upload, percent).await {
+        Ok(()) => handle.close().await,
+        Err(error) => {
+            // The connection is gone, so there's nothing to close it on, and
+            // its Drop would print that it wasn't, over the terminal's bar.
+            std::mem::forget(handle);
+            Err(error)
+        }
+    }
+}
+
+async fn write_from(
+    handle: &mut FileDescriptor<'_>,
+    bytes: &[u8],
+    from: u64,
+    upload: &mut Upload,
+    percent: &impl Fn(u64),
+) -> Result<(), IdeviceError> {
+    if from > 0 {
+        handle.set_size(from).await?;
+    }
+    for piece in bytes.get(from as usize..).unwrap_or_default().chunks(PIECE) {
+        handle.write_entire(piece).await?;
+        upload.wrote(piece.len() as u64);
+        percent(upload.percent());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

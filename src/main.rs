@@ -63,6 +63,7 @@ mod terminal;
 mod testing;
 mod token;
 mod tunnel;
+mod upload;
 mod vfs;
 
 use std::fs;
@@ -71,6 +72,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use isideload::dev::developer_session::DeveloperSession;
 
@@ -604,24 +606,27 @@ fn finish(
 }
 
 /// Installs the signed app through a new tunnel. When the connection
-/// breaks, as it can while rootshell isn't on screen, it tries again on
-/// the user's word, through another: the app is signed already.
+/// breaks, as it does once rootshell has been off screen a while, it
+/// reaches the iPhone again by itself, once rootshell is back, and goes on
+/// from where the upload broke: the app is signed already.
 fn install_app(
     pairing: &mut Pairing,
     port: u16,
     app: &Path,
     state: &State,
 ) -> Result<phone::Phone, Stop> {
+    let mut phone = reach(pairing, port).map_err(|problem| explain(problem, state, port, false))?;
+    let mut upload = upload::Upload::default();
+    // Where the bar is: where a try broke, for the next.
+    let mut at = 0;
     loop {
         page::show(View::Installing {
             signed: true,
-            bar: Bar::new(0.0, INSTALLING),
+            bar: Bar::new(at as f64 / 100.0, INSTALLING),
         });
-        let mut phone =
-            reach(pairing, port).map_err(|problem| explain(problem, state, port, false))?;
         let shown = AtomicU64::new(u64::MAX);
         let checked_in = awake::checked_in();
-        let installed = phone.install(app, |percent| {
+        let installed = phone.install(app, &mut upload, |percent| {
             awake::check_in();
             if shown.swap(percent, Ordering::Relaxed) != percent {
                 terminal::bar(percent as f64 / 100.0, format!("{percent}%"));
@@ -644,28 +649,74 @@ fn install_app(
                 if !connection_broke(&report) {
                     return Err(install_problem(&report));
                 }
-                terminal::notify(
-                    "The install's connection broke: come back to rootshell to try again.",
-                );
+                at = upload.percent();
+                terminal::notify("The install's connection broke: open rootshell, and it goes on.");
                 terminal::say("The connection to this iPhone broke, as it can while rootshell");
-                terminal::say("isn't on screen. Stay in rootshell until it's installed.");
-                if page::on() {
-                    page::ask(View::Question {
-                        title: "The connection to this iPhone broke".into(),
-                        text: vec![
-                            "Check that LocalDevVPN is connected. Atelier is signed already, so trying again only installs it.".into(),
-                        ],
-                        options: Vec::new(),
-                        yes: "Try again".into(),
-                        no: None,
-                    })?;
-                } else {
-                    terminal::ask("Press Return to try again, or Control-C to stop. ")?;
+                terminal::say(format!(
+                    "isn't on screen. It goes on from {at}% once rootshell is back."
+                ));
+                phone = reach_again(pairing, port, state, at)?;
+                terminal::say(format!("Connected again: going on from {at}%."));
+            }
+        }
+    }
+}
+
+/// How long the program waits between two tries at reaching the iPhone
+/// again. While rootshell isn't on screen, iOS holds the program where it
+/// is, so it tries again only once rootshell is back.
+const AGAIN: Duration = Duration::from_secs(2);
+/// How many tries fail before it says what to check.
+const SAY_AFTER: u32 = 3;
+
+/// Reaches the iPhone again, once the install's connection broke at `at`%:
+/// tries until it can, answering the page meanwhile. It stops only when
+/// the iPhone refuses the pairing, as trying again wouldn't change that.
+fn reach_again(
+    pairing: &mut Pairing,
+    port: u16,
+    state: &State,
+    at: u64,
+) -> Result<phone::Phone, Stop> {
+    let mut tries = 0u32;
+    loop {
+        let waited = std::time::Instant::now();
+        while waited.elapsed() < AGAIN {
+            page::tick();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        tries += 1;
+        match phone::connect(&mut pairing.file, port) {
+            Ok(phone) => {
+                terminal::log(format!("install: reached the iPhone again, try {tries}"));
+                return Ok(phone);
+            }
+            Err(phone::Problem::NotPaired) => {
+                return Err(explain(phone::Problem::NotPaired, state, port, false));
+            }
+            Err(problem) => {
+                if tries <= SAY_AFTER || tries.is_multiple_of(30) {
+                    terminal::log(format!(
+                        "install: try {tries} at reaching the iPhone: {problem:?}"
+                    ));
+                }
+                if tries == SAY_AFTER {
+                    terminal::say(
+                        "Can't reach this iPhone yet. Check that LocalDevVPN is connected:",
+                    );
+                    terminal::say("this keeps trying, and Control-C stops.");
+                    page::show(View::Installing {
+                        signed: true,
+                        bar: Bar::new(at as f64 / 100.0, CANT_REACH),
+                    });
                 }
             }
         }
     }
 }
+
+/// What the page's bar says when the program can't reach the iPhone again.
+const CANT_REACH: &str = "Can't reach this iPhone: check that LocalDevVPN is connected";
 
 /// What the page's bar says as it installs.
 const INSTALLING: &str = "Installing on this iPhone";
