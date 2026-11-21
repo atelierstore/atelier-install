@@ -63,6 +63,7 @@ mod terminal;
 mod testing;
 mod token;
 mod tunnel;
+mod upload;
 mod vfs;
 
 use std::fs;
@@ -71,6 +72,7 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use isideload::dev::developer_session::DeveloperSession;
 
@@ -108,6 +110,9 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
   --pairing-to <path> where the app takes this iPhone's pairing, in its
                       container, when its Info.plist doesn't say (it's asked)
   --redo              sign the IPA anew, where a run that stopped would go on
+  --shortcut <n>      with --page: the Install Atelier Shortcut's version, from 2;
+                      without it, the page says to delete that Shortcut and add
+                      the new one, which shows the page over rootshell
   --other-apple-id    ask for the Apple ID, where the program would sign in
                       with the one it kept from the last sign-in
   --forget            delete what this program keeps in .atelier
@@ -126,6 +131,8 @@ struct Options {
     pairing_to: Option<String>,
     /// The page to ask on, in place of the terminal (page.rs).
     page: Option<page::Address>,
+    /// The Install Atelier Shortcut's version, with the page (page.rs).
+    shortcut: Option<u32>,
     redo: bool,
     check: bool,
     sign_in: bool,
@@ -146,6 +153,15 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             "--other-apple-id" => options.other_apple_id = true,
             "--forget" => options.forget = true,
             "--redo" => options.redo = true,
+            "--shortcut" => {
+                options.shortcut = Some(
+                    value("--shortcut")?
+                        .parse()
+                        .ok()
+                        .filter(|version| *version >= 1)
+                        .ok_or("--shortcut takes the Shortcut's version, a number from 1 up")?,
+                );
+            }
             "--ipa" => options.ipa = Some(value("--ipa")?),
             "--sha256" => {
                 let digest = value("--sha256")?;
@@ -180,6 +196,9 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             "--page" => options.page = Some(page::Address::parse(&value("--page")?)?),
             other => return Err(format!("`{other}` isn't an option")),
         }
+    }
+    if options.shortcut.is_some() && options.page.is_none() {
+        return Err("--shortcut goes with --page".into());
     }
     if options.page.is_some()
         && (options.ipa.is_some()
@@ -234,8 +253,12 @@ fn main() -> ExitCode {
         }
         prepare(&state);
         if let Some(address) = &options.page {
-            page::start(address)?;
+            let shortcut = options.shortcut.unwrap_or(1);
+            page::start(address, shortcut)?;
             terminal::no_notifications();
+            if shortcut < page::OLDEST {
+                return Err(earlier_shortcut());
+            }
             page::wait_for_visit()?;
         }
         let result = run(&options, &state);
@@ -264,6 +287,21 @@ fn main() -> ExitCode {
 
 /// The log, in the folder Files shows, to send along when a run fails.
 const LOG: &str = "atelier-install.log";
+
+/// An Install Atelier Shortcut older than the installer goes with: the page
+/// says to delete it and add the new one, before anything else, as iOS
+/// would keep both and the website runs the Shortcut by its name. The
+/// terminal says the same.
+fn earlier_shortcut() -> Stop {
+    terminal::log("the page: an earlier Shortcut, so it says to delete it and add the new one");
+    page::show(View::EarlierShortcut);
+    if page::wait_for_visit().is_ok() {
+        page::end();
+    }
+    Stop::new("This Install Atelier Shortcut is an earlier one: it opens the page in Safari, which needs Location Diary Mode. The new one shows it over rootshell")
+        .next("Delete this one first: in Shortcuts, touch and hold Install Atelier, then tap Delete. If you also have Install Atelier 2, delete it too.")
+        .next("Then add the new one at atelierstore.app/apple-id: tap Install Atelier to add it, then again to run it.")
+}
 
 /// Hands isideload what rootshell has in place of what it'd take from the
 /// system: connections, with rootshell's TLS, and files, with its
@@ -559,37 +597,48 @@ fn finish(
         kept.name
     ));
     println!();
-    println!("{} is on your Home Screen. Before it opens:", kept.name);
+    println!("{} is installed.", kept.name);
+    println!();
+    println!("Before {} opens the first time:", kept.name);
     println!("  1. Settings › General › VPN & Device Management › your Apple ID › Trust.");
-    println!("  2. Open {}.", kept.name);
+    println!("  2. Open {} from your Home Screen.", kept.name);
     println!("It opens for 7 days. This test build doesn't renew it: run it again");
     println!("before then.");
+    println!();
+    println!("You can leave rootshell now.");
     Ok(())
 }
 
 /// Installs the signed app through a new tunnel. When the connection
-/// breaks, as it can while rootshell isn't on screen, it tries again on
-/// the user's word, through another: the app is signed already.
+/// breaks, as it does once rootshell has been off screen a while, it
+/// reaches the iPhone again by itself, once rootshell is back, and goes on
+/// from where the upload broke: the app is signed already.
 fn install_app(
     pairing: &mut Pairing,
     port: u16,
     app: &Path,
     state: &State,
 ) -> Result<phone::Phone, Stop> {
+    let mut phone = reach(pairing, port).map_err(|problem| explain(problem, state, port, false))?;
+    let mut upload = upload::Upload::default();
+    // Where the bar is: where a try broke, for the next.
+    let mut at = 0;
     loop {
         page::show(View::Installing {
             signed: true,
-            bar: Bar::new(0.0, INSTALLING),
+            bar: Bar::new(at as f64 / 100.0, INSTALLING),
         });
-        let mut phone =
-            reach(pairing, port).map_err(|problem| explain(problem, state, port, false))?;
         let shown = AtomicU64::new(u64::MAX);
         let checked_in = awake::checked_in();
-        let installed = phone.install(app, |percent| {
+        let installed = phone.install(app, &mut upload, |percent| {
             awake::check_in();
             if shown.swap(percent, Ordering::Relaxed) != percent {
                 terminal::bar(percent as f64 / 100.0, format!("{percent}%"));
                 page::bar(percent as f64 / 100.0, INSTALLING);
+            } else {
+                // As the signing does: the page, and the Shortcut when its
+                // web view closes, don't wait for the next percent.
+                page::tick();
             }
         });
         terminal::log(format!(
@@ -608,28 +657,74 @@ fn install_app(
                 if !connection_broke(&report) {
                     return Err(install_problem(&report));
                 }
-                terminal::notify(
-                    "The install's connection broke: come back to rootshell to try again.",
-                );
+                at = upload.percent();
+                terminal::notify("The install's connection broke: open rootshell, and it goes on.");
                 terminal::say("The connection to this iPhone broke, as it can while rootshell");
-                terminal::say("isn't on screen. Stay in rootshell until it's installed.");
-                if page::on() {
-                    page::ask(View::Question {
-                        title: "The connection to this iPhone broke".into(),
-                        text: vec![
-                            "Check that LocalDevVPN is connected. Atelier is signed already, so trying again only installs it.".into(),
-                        ],
-                        options: Vec::new(),
-                        yes: "Try again".into(),
-                        no: None,
-                    })?;
-                } else {
-                    terminal::ask("Press Return to try again, or Control-C to stop. ")?;
+                terminal::say(format!(
+                    "isn't on screen. It goes on from {at}% once rootshell is back."
+                ));
+                phone = reach_again(pairing, port, state, at)?;
+                terminal::say(format!("Connected again: going on from {at}%."));
+            }
+        }
+    }
+}
+
+/// How long the program waits between two tries at reaching the iPhone
+/// again. While rootshell isn't on screen, iOS holds the program where it
+/// is, so it tries again only once rootshell is back.
+const AGAIN: Duration = Duration::from_secs(2);
+/// How many tries fail before it says what to check.
+const SAY_AFTER: u32 = 3;
+
+/// Reaches the iPhone again, once the install's connection broke at `at`%:
+/// tries until it can, answering the page meanwhile. It stops only when
+/// the iPhone refuses the pairing, as trying again wouldn't change that.
+fn reach_again(
+    pairing: &mut Pairing,
+    port: u16,
+    state: &State,
+    at: u64,
+) -> Result<phone::Phone, Stop> {
+    let mut tries = 0u32;
+    loop {
+        let waited = std::time::Instant::now();
+        while waited.elapsed() < AGAIN {
+            page::tick();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        tries += 1;
+        match phone::connect(&mut pairing.file, port) {
+            Ok(phone) => {
+                terminal::log(format!("install: reached the iPhone again, try {tries}"));
+                return Ok(phone);
+            }
+            Err(phone::Problem::NotPaired) => {
+                return Err(explain(phone::Problem::NotPaired, state, port, false));
+            }
+            Err(problem) => {
+                if tries <= SAY_AFTER || tries.is_multiple_of(30) {
+                    terminal::log(format!(
+                        "install: try {tries} at reaching the iPhone: {problem:?}"
+                    ));
+                }
+                if tries == SAY_AFTER {
+                    terminal::say(
+                        "Can't reach this iPhone yet. Check that LocalDevVPN is connected:",
+                    );
+                    terminal::say("this keeps trying, and Control-C stops.");
+                    page::show(View::Installing {
+                        signed: true,
+                        bar: Bar::new(at as f64 / 100.0, CANT_REACH),
+                    });
                 }
             }
         }
     }
 }
+
+/// What the page's bar says when the program can't reach the iPhone again.
+const CANT_REACH: &str = "Can't reach this iPhone: check that LocalDevVPN is connected";
 
 /// What the page's bar says as it installs.
 const INSTALLING: &str = "Installing on this iPhone";
@@ -1214,6 +1309,16 @@ mod tests {
             arguments.extend_from_slice(against);
             assert!(options(&arguments).is_err(), "{against:?}");
         }
+        assert_eq!(
+            options(&["--page", PAGE, "--shortcut", "2"])
+                .unwrap()
+                .shortcut,
+            Some(2)
+        );
+        assert_eq!(options(&["--page", PAGE]).unwrap().shortcut, None);
+        assert!(options(&["--page", PAGE, "--shortcut", "0"]).is_err());
+        assert!(options(&["--page", PAGE, "--shortcut", "two"]).is_err());
+        assert!(options(&["--shortcut", "2"]).is_err());
         assert!(
             options(&[
                 "--page",
