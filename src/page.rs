@@ -37,7 +37,9 @@
 //!
 //! In the web view, each time you close it (✕, or Done before iOS 26), the
 //! Shortcut asks what's next at `/closed`: Settings, for Pair; the page
-//! again; or nothing, once it's done or stopped. The program goes on
+//! again; once it's installed, Settings on VPN & Device Management, where
+//! you trust the app's developer, as the page says, then nothing more; or
+//! nothing, once it's stopped. The program goes on
 //! answering until the Shortcut has heard that, for [`LINGER`] at most, so
 //! closing the last screen doesn't end the Shortcut on an error.
 
@@ -821,15 +823,18 @@ impl Page {
     }
 
     /// What the Shortcut does now that you closed its web view: `settings`
-    /// to pair, `show` the page again, or `stop`, once it's done or
-    /// stopped, as nothing's left to show.
+    /// to pair, `show` the page again, `trust` once it's installed (Settings
+    /// on VPN & Device Management, where you trust the app's developer,
+    /// then it ends), or `stop`, once it's stopped, as nothing's left to
+    /// show.
     fn closed(&mut self) -> Vec<u8> {
         let next = match &self.view {
+            View::Done { .. } => "trust",
             view if view.over() => "stop",
             View::Pair { .. } if self.pairing.going() => "settings",
             _ => "show",
         };
-        self.told_over = next == "stop";
+        self.told_over = matches!(next, "stop" | "trust");
         self.away = (!self.told_over).then(Instant::now);
         let screen = screen(&self.view);
         terminal::log(format!(
@@ -1287,7 +1292,14 @@ mod tests {
         );
         assert_eq!(
             closed(&mut page),
-            json!({ "screen": "done", "next": "stop" })
+            json!({ "screen": "done", "next": "trust" })
+        );
+        assert!(page.told_over);
+        page.told_over = false;
+        page.set(View::Ended, false);
+        assert_eq!(
+            closed(&mut page),
+            json!({ "screen": "ended", "next": "stop" })
         );
         assert!(page.told_over);
     }
@@ -1326,7 +1338,7 @@ mod tests {
         let (_, body) = read_answer(sent);
         assert_eq!(
             serde_json::from_str::<Value>(&body).unwrap()["next"],
-            "stop"
+            "trust"
         );
         PAGE.set(None);
     }

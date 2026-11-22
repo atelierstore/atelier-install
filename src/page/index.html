@@ -3,14 +3,16 @@
   The installer's page, served by atelier-install.wasm at 127.0.0.1 (src/page.rs),
   in the Install Atelier Shortcut's web view over rootshell. An earlier
   Shortcut, which opens it in Safari, only gets the earlier-shortcut screen:
-  data-in marks the lede of each (page.css), as the program adds the web-view
-  class from the Shortcut's version 2 on (--shortcut).
+  data-in marks what differs, the lede and Done's steps (page.css), as the
+  program adds the web-view class from the Shortcut's version 2 on
+  (--shortcut).
   It carries on from atelierstore.app/apple-id, as the same page: the
   website's header, its four steps with the first two done, and step 3
   holding the installer's screens. Done moves into step 4. As the mockups
   Alex approved: the screens of 13 Nov 2026, the states drawn after them,
   the one-page journey of 14 Nov, the web view's wording of 15 Nov,
-  without Location Diary Mode, and the earlier Shortcut's screen of 16 Nov.
+  without Location Diary Mode, the earlier Shortcut's screen of 16 Nov, and
+  Done's way to Settings in the web view of 22 Nov.
 -->
 <html lang="en">
 <head>
@@ -177,10 +179,11 @@
   <h2>Atelier is installed</h2>
   <p>One step before it opens the first time:</p>
   <ol>
-    <li>Open <strong>Settings › General › VPN &amp; Device Management</strong>.</li>
+    <li data-in="web-view">Close this page, at the top left. Settings opens on <strong>VPN &amp; Device Management</strong>.</li>
+    <li data-in="safari">Open <strong>Settings › General › VPN &amp; Device Management</strong>.</li>
     <li>Tap your Apple ID, then <strong>Trust</strong>.</li>
   </ol>
-  <p class="note">Then open Atelier from your Home Screen. <span data-part="handed">It opens signed in and already paired. </span>The installer has stopped, so you can close rootshell and this page.</p>
+  <p class="note">Then open Atelier from your Home Screen. <span data-part="handed">It opens signed in and already paired. </span><span data-in="web-view">The installer has stopped, so you can close rootshell.</span><span data-in="safari">The installer has stopped, so you can close rootshell and this page.</span></p>
 </template>
 
 <template id="ended">
