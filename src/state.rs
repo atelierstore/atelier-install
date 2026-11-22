@@ -11,6 +11,7 @@
 //! | What the sign-in waits for, and what stopped runs waited for | `anisette/trying`, `anisette/stalled` | a sign-in goes through |
 //! | The IPA, unpacked and signed | `work/` | the install's done (kept.rs) |
 //! | A downloaded IPA, and its link | `download.ipa`, `download.link` | the install's done |
+//! | The run going with the page: its page's port and a word of its own | `running` | the run ends (running.rs) |
 //! | What was signed, and what the app takes | `install.plist` | the install's done (kept.rs) |
 //! | The certificate and the sign-in the app takes | `install-signing.plist` | the app has them (kept.rs) |
 //!
@@ -44,11 +45,17 @@ pub struct State {
 impl State {
     /// `$ATELIER_HOME`, or `.atelier` in the home folder: rootshell's.
     pub fn open() -> io::Result<State> {
+        State::open_in(State::find().folder)
+    }
+
+    /// The same folder, as it is, for a look that changes nothing in it:
+    /// another run may be writing there (running.rs).
+    pub fn find() -> State {
         let folder = match std::env::var_os("ATELIER_HOME") {
             Some(folder) => PathBuf::from(folder),
             None => files_folder().join(".atelier"),
         };
-        State::open_in(folder)
+        State { folder }
     }
 
     fn open_in(folder: PathBuf) -> io::Result<State> {
@@ -64,6 +71,11 @@ impl State {
 
     pub fn pairing(&self) -> PathBuf {
         self.folder.join("pairing.plist")
+    }
+
+    /// The run going with the page, while one is (running.rs).
+    pub fn running(&self) -> PathBuf {
+        self.folder.join("running")
     }
 
     /// The pairing service's port, when one worked before.

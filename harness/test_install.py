@@ -24,6 +24,8 @@ and that the key isn't in the log. In the Shortcut's web view
 (--shortcut 2), what the Shortcut hears when you close it, and that the
 program goes on until the Shortcut has heard it's over. And that an earlier
 Shortcut, without a version, only hears to delete it and add the new one.
+And that a new run asks the run still going with the page to stop
+(--step-aside, as the Shortcut's line does first), which then ends.
 
     cargo build --release --target wasm32-wasip1
     cargo build -p atelier-testphone
@@ -628,6 +630,88 @@ def page(address, closed):
     check(status == 0 and "Stopped from the page" in said,
           f"after the page's stop, it said ({status}):\n{said}")
     print("ok  the page's Stop ends the installer, after answering with the ended screen, and the Shortcut")
+    shutil.rmtree(folder)
+
+    step_aside(address, closed, key)
+
+
+def step_aside(address, closed, key):
+    """A new run asks the run still going with the page to stop, as the
+    Shortcut's line does first, with the word that run noted in
+    .atelier/running rather than the page's key. The run says so in its tab
+    and ends; the new one goes on. A run with the page asks too, as it
+    starts. A note nobody answers for goes, and nothing is said."""
+    folder = tempfile.mkdtemp(prefix="atelier-install-step-aside-")
+    with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
+        ifconfig.write(IFCONFIG.format(address=address))
+    running = os.path.join(folder, ".atelier", "running")
+    log = os.path.join(folder, "atelier-install.log")
+
+    status, said = run(folder, "--step-aside")
+    check(status == 0 and said == "", f"with no run going, --step-aside said ({status}):\n{said}")
+
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed)
+    page = Page(port, key)
+    page.wait_for("pair", program)
+    with open(running) as noted:
+        noted_port, word = noted.read().split()
+    check(int(noted_port) == port and re.fullmatch(r"[0-9a-f]{32}", word), f"the note: {noted_port} {word}", program)
+    for headers, host in [({"X-Atelier-Key": key}, None),
+                          ({"X-Atelier-Step-Aside": word[:-1] + "x"}, None),
+                          ({"X-Atelier-Step-Aside": word}, f"atelier.example:{port}")]:
+        check(page.ask("POST", "/step-aside", body=b"", headers=headers, host=host)[0] == 403,
+              f"a step aside with {headers} under {host}", program)
+    check(program.process.poll() is None and os.path.exists(running), "it stopped for the wrong word", program)
+    print("ok  the run with the page notes its own word, and stops for nobody without it")
+
+    status, said = run(folder, "--step-aside")
+    check(status == 0 and "The last run was still going in another tab. It has stopped, and this\n"
+          "one goes on from where it was." in said, f"--step-aside said ({status}):\n{said}", program)
+    status, first = program.end()
+    check(status == 0 and "A new run of the installer started in another tab, so this one stops here.\n"
+          "The new one goes on from where it was." in first, f"the run asked to stop said ({status}):\n{first}")
+    check(not os.path.exists(running), "the note stayed once the run stopped")
+    with open(log) as kept:
+        logged = kept.read()
+    check("the page: a new run asked this one to stop" in logged and word not in logged and key not in logged,
+          f"the stopped run's log:\n{logged}")
+    print("ok  --step-aside stops the run going with the page, which says so, and waits for it to end")
+
+    # A run with the page that starts while one is going: it asks too.
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed)
+    page = Page(port, key)
+    page.wait_for("pair", program)
+    other = random.randint(20000, 29999)
+    while other == port:
+        other = random.randint(20000, 29999)
+    second = Program(folder, "--page", f"http://127.0.0.1:{other}/#{key}", "--shortcut", "2", "--port", closed)
+    second.wait_for(r"The last run was still going in another tab", "that it stopped the run going")
+    status, first = program.end()
+    check(status == 0 and "A new run of the installer started in another tab" in first,
+          f"the first run said ({status}):\n{first}", second)
+    Page(other, key).wait_for("pair", second)
+    with open(running) as noted:
+        check(noted.read().split()[0] == str(other), "the new run didn't note itself", second)
+    with open(log) as kept:
+        check("a run with the page was still going in another tab: it stopped" in kept.read(),
+              "the new run's log", second)
+    status, _ = Page(other, key).ask("POST", "/stop", body=b"", headers={"X-Atelier-Key": key})
+    check(status == 200 and Page(other, key).closed()["next"] == "stop", "the second run's stop", second)
+    status, said = second.end()
+    check(status == 0 and "Stopped from the page" in said, f"the second run said ({status}):\n{said}")
+    check(not os.path.exists(running), "the note stayed once the run was stopped from the page")
+    print("ok  a run with the page stops the one going as it starts, and its note goes as it ends")
+
+    # A note a stopped run left (Control-C, or rootshell quit): nothing
+    # answers at its port, so it goes, and nothing is said.
+    with open(running, "w") as stale:
+        stale.write(f"{closed_port()} 0123456789abcdef0123456789abcdef\n")
+    status, said = run(folder, "--step-aside")
+    check(status == 0 and said == "" and not os.path.exists(running),
+          f"with a note nobody answers for, --step-aside said ({status}):\n{said}")
+    print("ok  a note a stopped run left goes, and nothing is said")
     shutil.rmtree(folder)
 
 

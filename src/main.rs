@@ -56,6 +56,7 @@ mod chunks;
 mod listing;
 mod paths;
 mod route;
+mod running;
 mod source;
 mod state;
 mod terminal;
@@ -101,6 +102,9 @@ Before it: turn Developer Mode on, be on Wi-Fi, and have LocalDevVPN.
   ./atelier-install.wasm --page <link>    install Atelier's newest release, asking on
                                           the page at <link>, http://127.0.0.1:PORT/#KEY,
                                           as the Install Atelier Shortcut runs it
+  ./atelier-install.wasm --step-aside     only ask a run with the page, still going in
+                                          another tab, to stop, as the Shortcut does
+                                          first: the new run goes on from where it was
 
   --sha256 <hex>      the IPA's SHA-256, to check it against
   --address <ip>      this iPhone's Wi-Fi address, for pairing, in place of
@@ -138,6 +142,8 @@ struct Options {
     sign_in: bool,
     other_apple_id: bool,
     forget: bool,
+    /// Only ask the run going with the page to stop (running.rs).
+    step_aside: bool,
     help: bool,
 }
 
@@ -153,6 +159,7 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             "--other-apple-id" => options.other_apple_id = true,
             "--forget" => options.forget = true,
             "--redo" => options.redo = true,
+            "--step-aside" => options.step_aside = true,
             "--shortcut" => {
                 options.shortcut = Some(
                     value("--shortcut")?
@@ -197,6 +204,15 @@ fn parse(arguments: impl Iterator<Item = String>) -> Result<Options, String> {
             other => return Err(format!("`{other}` isn't an option")),
         }
     }
+    if options.step_aside
+        && options
+            != (Options {
+                step_aside: true,
+                ..Options::default()
+            })
+    {
+        return Err("--step-aside goes alone".into());
+    }
     if options.shortcut.is_some() && options.page.is_none() {
         return Err("--shortcut goes with --page".into());
     }
@@ -227,6 +243,13 @@ fn main() -> ExitCode {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
     }
+    if options.step_aside {
+        running::step_aside(&State::find());
+        return ExitCode::SUCCESS;
+    }
+    // For a line that didn't ask first, and before this run touches what
+    // it keeps.
+    let took_over = options.page.is_some() && running::step_aside(&State::find());
 
     let result = State::open().map_err(Stop::from).and_then(|state| {
         if options.forget {
@@ -242,6 +265,9 @@ fn main() -> ExitCode {
         }
         terminal::start_log(&state::files_folder().join(LOG));
         terminal::log(format!("atelier-install {}", env!("CARGO_PKG_VERSION")));
+        if took_over {
+            terminal::log("a run with the page was still going in another tab: it stopped");
+        }
         if net::has_177_calls() {
             terminal::log("rootshell: 1.0.16-177 or later");
         } else {
@@ -255,6 +281,9 @@ fn main() -> ExitCode {
         if let Some(address) = &options.page {
             let shortcut = options.shortcut.unwrap_or(1);
             page::start(address, shortcut)?;
+            if let Some(word) = running::note(&state, address.port) {
+                page::stops_for(word);
+            }
             terminal::no_notifications();
             if shortcut < page::OLDEST {
                 return Err(earlier_shortcut());
@@ -272,6 +301,7 @@ fn main() -> ExitCode {
         page::end();
         result
     });
+    running::clear();
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(stop) => {
@@ -1288,6 +1318,26 @@ mod tests {
         assert!(options(&["--redo"]).unwrap().redo);
         assert!(options(&["--other-apple-id"]).unwrap().other_apple_id);
         assert!(options(&["-h"]).unwrap().help);
+    }
+
+    #[test]
+    fn steps_aside_alone() {
+        assert!(options(&["--step-aside"]).unwrap().step_aside);
+        for with in [
+            &["--step-aside", "--check"][..],
+            &[
+                "--page",
+                "http://127.0.0.1:24680/#123456789987654321111111111",
+                "--step-aside",
+            ],
+            &["--step-aside", "--shortcut", "2"],
+        ] {
+            assert_eq!(
+                options(with),
+                Err("--step-aside goes alone".into()),
+                "{with:?}"
+            );
+        }
     }
 
     #[test]

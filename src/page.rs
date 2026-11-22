@@ -42,6 +42,11 @@
 //! nothing, once it's stopped. The program goes on
 //! answering until the Shortcut has heard that, for [`LINGER`] at most, so
 //! closing the last screen doesn't end the Shortcut on an error.
+//!
+//! A new run asks this one to stop at `/step-aside`, with the word this
+//! one noted in `.atelier/running` rather than the page's key, which the
+//! new run doesn't have (`running.rs`). This one then says so in its tab
+//! and ends, as Control-C would, and the page is the new run's.
 
 mod http;
 
@@ -54,6 +59,7 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::door::{Door, Visitor};
+use crate::running;
 use crate::terminal::{self, Stop};
 use http::{Nothing, Request};
 
@@ -326,12 +332,34 @@ fn end_from_page() -> ! {
     println!();
     println!("Stopped from the page. The next run picks up where this one left off.");
     let _ = std::io::Write::flush(&mut std::io::stdout());
+    running::clear();
     std::process::exit(0)
 }
 
 /// The tests stay in their process: they look at `ending`.
 #[cfg(test)]
 fn end_from_page() {}
+
+/// Ends the program as Control-C does, once a new run has heard it will:
+/// the new run goes on from what each step made.
+#[cfg(not(test))]
+fn end_for_new_run() -> ! {
+    terminal::log(format!(
+        "the page: a new run asked this one to stop, {} s in",
+        terminal::seconds()
+    ));
+    terminal::leave_progress();
+    println!("A new run of the installer started in another tab, so this one stops here.");
+    println!("The new one goes on from where it was.");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    // Last: the new run waits for the file to go.
+    running::clear();
+    std::process::exit(0)
+}
+
+/// The tests stay in their process: they look at `stepping_aside`.
+#[cfg(test)]
+fn end_for_new_run() {}
 
 thread_local! {
     static PAGE: RefCell<Option<Page>> = const { RefCell::new(None) };
@@ -368,6 +396,11 @@ pub fn start(address: &Address, shortcut: u32) -> Result<(), Stop> {
     ));
     PAGE.set(Some(page));
     Ok(())
+}
+
+/// The word a new run asks this one to stop with (`running.rs`).
+pub fn stops_for(word: String) {
+    with(|page| page.step_aside = Some(word));
 }
 
 /// The view's screen, as the page names it.
@@ -563,6 +596,9 @@ struct Page {
     away: Option<Instant>,
     /// Whether it goes on answering, stopped from the page, before it ends.
     lingering: bool,
+    /// The word a new run asks this one to stop with, and whether one did.
+    step_aside: Option<String>,
+    stepping_aside: bool,
 }
 
 impl Page {
@@ -591,6 +627,8 @@ impl Page {
             told_over: false,
             away: None,
             lingering: false,
+            step_aside: None,
+            stepping_aside: false,
         })
     }
 
@@ -694,6 +732,9 @@ impl Page {
         };
         let _ = visitor.write_all(&reply);
         drop(visitor);
+        if self.stepping_aside {
+            end_for_new_run();
+        }
         // Once: what it answers while it lingers comes back here.
         if self.ending && !self.lingering {
             self.lingering = true;
@@ -763,6 +804,22 @@ impl Page {
             ("GET", "/page.js") => file("text/javascript; charset=utf-8", SCRIPT),
             ("GET", "/icon.png") => file("image/png", ICON),
             ("GET", "/display.woff2") => file("font/woff2", FONT),
+            ("POST", "/step-aside") => {
+                let asked = request.header(running::HEADER);
+                let word = self.step_aside.as_deref();
+                if !asked
+                    .zip(word)
+                    .is_some_and(|(asked, word)| same(asked, word))
+                {
+                    return http::answer(
+                        "403 Forbidden",
+                        TEXT,
+                        b"Only a new run of the installer asks this.\n",
+                    );
+                }
+                self.stepping_aside = true;
+                file(JSON, json!({ "stopping": true }).to_string().as_bytes())
+            }
             ("GET", "/state") | ("POST", "/answer") | ("POST", "/stop") if !keyed => {
                 http::answer("403 Forbidden", TEXT, b"Only the page asks this.\n")
             }
@@ -998,6 +1055,8 @@ mod tests {
             told_over: false,
             away: None,
             lingering: false,
+            step_aside: None,
+            stepping_aside: false,
         }
     }
 
@@ -1502,6 +1561,46 @@ mod tests {
         let state: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(state["view"]["screen"], "done");
         assert!(!page.ending);
+    }
+
+    #[test]
+    fn steps_aside_for_a_new_run_with_its_word_alone() {
+        const WORD: &str = "0123456789abcdef0123456789abcdef";
+        let mut page = page();
+        let port = page.port;
+        let ask = |word: Option<&str>, host: &str| {
+            let word = word.map_or(String::new(), |word| {
+                format!("{}: {word}\r\n", running::HEADER)
+            });
+            format!("POST /step-aside HTTP/1.1\r\nHost: {host}\r\n{word}Content-Length: 0\r\n\r\n")
+        };
+        let here = format!("127.0.0.1:{port}");
+        // Before it noted its word, nobody's.
+        assert_eq!(
+            exchange(&mut page, &ask(Some(WORD), &here)).0,
+            "HTTP/1.1 403 Forbidden"
+        );
+        page.step_aside = Some(WORD.into());
+        for refused in [
+            ask(None, &here),
+            ask(Some("0123456789abcdef0123456789abcdee"), &here),
+            // The page's key isn't the word.
+            ask(Some(KEY), &here),
+            ask(Some(WORD), &format!("atelier.example:{port}")),
+        ] {
+            assert_eq!(exchange(&mut page, &refused).0, "HTTP/1.1 403 Forbidden");
+            assert!(!page.stepping_aside);
+        }
+        // Nor does the page's key stand in for it.
+        let with_key = format!(
+            "POST /step-aside HTTP/1.1\r\nHost: {here}\r\nX-Atelier-Key: {KEY}\r\nContent-Length: 0\r\n\r\n"
+        );
+        assert_eq!(exchange(&mut page, &with_key).0, "HTTP/1.1 403 Forbidden");
+        assert!(!page.stepping_aside);
+        let (status, body) = exchange(&mut page, &ask(Some(WORD), &here));
+        assert_eq!(status, "HTTP/1.1 200 OK");
+        assert_eq!(body, r#"{"stopping":true}"#);
+        assert!(page.stepping_aside);
     }
 
     #[test]

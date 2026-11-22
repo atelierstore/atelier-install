@@ -125,10 +125,14 @@ pub fn say_personal(line: impl Display, logged: impl Display) {
 const OVER: &str = "\x1b[G";
 const CLEAR_REST: &str = "\x1b[K";
 
+/// Whether a line of progress is on the screen, which nothing ended yet.
+static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
 /// A line that the next one replaces, for progress. It ends with `done`.
 pub fn progress(line: impl Display) {
     print!("{OVER}  {line}{CLEAR_REST}");
     let _ = io::stdout().flush();
+    IN_PROGRESS.store(true, Ordering::Relaxed);
 }
 
 /// Progress as a bar, `fraction` of the way along, with `label` after it,
@@ -164,7 +168,17 @@ fn bar_line(fraction: f64, label: &str, columns: Option<usize>) -> String {
 /// Ends a line of progress.
 pub fn done(line: impl Display) {
     println!("{OVER}  {line}{CLEAR_REST}");
+    IN_PROGRESS.store(false, Ordering::Relaxed);
     log(format!("  {line}"));
+}
+
+/// Leaves a line of progress as it is, for what comes out of turn, as the
+/// program stops on the way.
+#[cfg_attr(test, allow(dead_code))]
+pub fn leave_progress() {
+    if IN_PROGRESS.swap(false, Ordering::Relaxed) {
+        println!();
+    }
 }
 
 /// Asks for a line. What's typed isn't logged.
