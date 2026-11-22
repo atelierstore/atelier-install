@@ -127,8 +127,10 @@ impl Vfs for StdVfs {
         fs::read(path)
     }
 
+    /// isideload's storage alone writes so: the signing key and each
+    /// anisette server's state, whole or not at all.
     fn write(&self, path: &Path, contents: &[u8]) -> io::Result<()> {
-        fs::write(path, contents)
+        crate::state::write_new(path, contents)
     }
 
     fn copy(&self, from: &Path, to: &Path) -> io::Result<u64> {

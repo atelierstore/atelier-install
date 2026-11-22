@@ -8,7 +8,8 @@ connect LocalDevVPN. There's no iPhone service behind 10.7.0.1 here, so each
 run stops at the tunnel, and says what to do.
 
 Then checks that the pairing it keeps is the one the phone made and isn't
-in the folder Files shows, that a second run uses it without pairing, that
+in the folder Files shows, that a second run uses it without pairing, also
+after a run stopped while writing it, that
 a run that stops leaves an install it signed for the next run, and nothing
 else in its work folder, that it takes and hides the file Atelier's pairing
 program leaves, that it refuses one that isn't a pairing, and that --forget
@@ -218,6 +219,22 @@ def main():
     check(status == 1 and "Using the pairing kept from the last run" in said
           and "Pair with Atelier" not in said, f"the second run said ({status}):\n{said}")
     print("ok  a second run uses the kept pairing")
+
+    # A run stopped as it wrote a kept file, with Control-C or by iOS,
+    # leaves the new copy whole beside it, or the last copy and part of
+    # the new one: the next run puts the whole one in place and drops the
+    # part. Here the pairing, stopped between rootshell's delete of the
+    # last copy and its rename, and the port, stopped while writing.
+    os.rename(kept, kept + ".written")
+    with open(os.path.join(folder, ".atelier", "port.writing"), "w") as file:
+        file.write("491")
+    status, said = run(folder, "--check", "--port", port)
+    leftovers = [name for name in os.listdir(os.path.join(folder, ".atelier"))
+                 if name.endswith((".writing", ".written"))]
+    check(status == 1 and "Using the pairing kept from the last run" in said
+          and os.path.isfile(kept) and not leftovers,
+          f"after a run stopped while writing, it said ({status}), and left {leftovers}:\n{said}")
+    print("ok  a run stopped as it wrote the pairing leaves it whole for the next run")
 
     # Without --port, where Bonjour finds this iPhone's pairing service:
     # of the devices that offer it, the one at its Wi-Fi address first, then
