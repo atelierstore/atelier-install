@@ -8,7 +8,8 @@ connect LocalDevVPN. There's no iPhone service behind 10.7.0.1 here, so each
 run stops at the tunnel, and says what to do.
 
 Then checks that the pairing it keeps is the one the phone made and isn't
-in the folder Files shows, that a second run uses it without pairing, that
+in the folder Files shows, that a second run uses it without pairing, also
+after a run stopped while writing it, that
 a run that stops leaves an install it signed for the next run, and nothing
 else in its work folder, that it takes and hides the file Atelier's pairing
 program leaves, that it refuses one that isn't a pairing, and that --forget
@@ -19,7 +20,12 @@ it: asks the page over HTTP, as the page's script does, reads the code it
 shows before the phone connects, pairs the phone on it, answers its
 question about LocalDevVPN, and reads why it stopped at the tunnel. And
 checks that the page answers nobody without its key or under another name,
-and that the key isn't in the log.
+and that the key isn't in the log. In the Shortcut's web view
+(--shortcut 2), what the Shortcut hears when you close it, and that the
+program goes on until the Shortcut has heard it's over. And that an earlier
+Shortcut, without a version, only hears to delete it and add the new one.
+And that a new run asks the run still going with the page to stop
+(--step-aside, as the Shortcut's line does first), which then ends.
 
     cargo build --release --target wasm32-wasip1
     cargo build -p atelier-testphone
@@ -216,6 +222,22 @@ def main():
           and "Pair with Atelier" not in said, f"the second run said ({status}):\n{said}")
     print("ok  a second run uses the kept pairing")
 
+    # A run stopped as it wrote a kept file, with Control-C or by iOS,
+    # leaves the new copy whole beside it, or the last copy and part of
+    # the new one: the next run puts the whole one in place and drops the
+    # part. Here the pairing, stopped between rootshell's delete of the
+    # last copy and its rename, and the port, stopped while writing.
+    os.rename(kept, kept + ".written")
+    with open(os.path.join(folder, ".atelier", "port.writing"), "w") as file:
+        file.write("491")
+    status, said = run(folder, "--check", "--port", port)
+    leftovers = [name for name in os.listdir(os.path.join(folder, ".atelier"))
+                 if name.endswith((".writing", ".written"))]
+    check(status == 1 and "Using the pairing kept from the last run" in said
+          and os.path.isfile(kept) and not leftovers,
+          f"after a run stopped while writing, it said ({status}), and left {leftovers}:\n{said}")
+    print("ok  a run stopped as it wrote the pairing leaves it whole for the next run")
+
     # Without --port, where Bonjour finds this iPhone's pairing service:
     # of the devices that offer it, the one at its Wi-Fi address first, then
     # the usual port, then the other devices', in case one is this iPhone
@@ -397,6 +419,26 @@ class Page:
             time.sleep(0.3)
         fail(f"the page never showed {screen}", program)
 
+    def pairing(self, known):
+        """The Shortcut's question about pairing: held until it changes from
+        `known`, or for 12 seconds."""
+        status, body = self.ask("GET", f"/pairing/{known}", headers={"X-Atelier-Key": self.key})
+        check(status == 200, f"the pairing's news: {status} {body!r}")
+        return json.loads(body)
+
+    def closed(self):
+        """What the Shortcut does once you close its web view."""
+        status, body = self.ask("GET", "/closed", headers={"X-Atelier-Key": self.key})
+        check(status == 200, f"what's next: {status} {body!r}")
+        return json.loads(body)
+
+    def pairing_later(self, known):
+        """The same, asked in the background, as the Shortcut waits while
+        the person is in Settings: a queue that gets its news."""
+        news = queue.Queue()
+        threading.Thread(target=lambda: news.put(self.pairing(known)), daemon=True).start()
+        return news
+
     def answer(self, state, answer):
         body = json.dumps({"seq": state["seq"], "answer": answer}).encode()
         status, reply = self.ask("POST", "/answer", body, {
@@ -414,14 +456,15 @@ def page(address, closed):
     observer = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     observer.bind(("127.0.0.1", 0))
     observer.settimeout(30)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed,
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed,
                       mdns_port=observer.getsockname()[1])
     page = Page(port, key)
 
     # Its files to anyone, its state only with the key, and nothing under
-    # another name.
+    # another name. In the Shortcut's web view, with the web view's wording.
     status, html = page.ask("GET", "/")
     check(status == 200 and b"Pair your iPhone with Atelier" in html, f"the page: {status}", program)
+    check(b'<html lang="en" class="web-view">' in html, "the page without the web view's wording", program)
     check(page.ask("GET", "/state")[0] == 403, "the state without the key", program)
     check(page.ask("GET", "/state", headers={"X-Atelier-Key": key[:-1] + "x"})[0] == 403,
           "the state with another key", program)
@@ -431,7 +474,7 @@ def page(address, closed):
 
     # Nothing happens before the page asks for the state with the key: no
     # announcement for Settings yet.
-    program.wait_for(r"Waiting for Safari to open the page", "that it waits for the page")
+    program.wait_for(r"Waiting for the page to open", "that it waits for the page")
     observer.settimeout(2)
     try:
         observer.recv(4096)
@@ -457,16 +500,40 @@ def page(address, closed):
     packet, _ = observer.recvfrom(4096)
     record = dnslib.DNSRecord.parse(packet)
     srv = next(a for a in record.rr if dnslib.QTYPE[a.rtype] == "SRV")
+    # The person taps Done: the Shortcut hears to open Settings, and asks
+    # how pairing goes, and hears when Settings asks for the code.
+    check(page.closed() == {"screen": "pair", "next": "settings"}, "Done on Pair", program)
+    waiting = page.pairing_later("waiting")
+    time.sleep(1)
+    check(waiting.empty(), "the Shortcut's question was answered before there was news", program)
     phone = subprocess.Popen([PHONE, "pair", address, str(srv.rdata.port)], stdin=subprocess.PIPE,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     check(phone.stdout.readline().strip() == "code?", "the phone didn't get to the code", program)
+    news = waiting.get(timeout=10)
+    check(news == {"pairing": "asked", "changed": True, "next": "notify", "code": code,
+                   "notice": f"Code for Settings: {code[:3]} {code[3:]}"},
+          f"when Settings asked for the code, the Shortcut heard {news}", program)
+    print("ok  the Shortcut hears the moment Settings asks for the code, with the notification's words")
     # From here until the code is typed, the program waits on the phone, as
-    # the person is in Settings: the page shows the code already.
+    # the person is in Settings. It still answers the page, and the
+    # Shortcut hears of no news in time to bring rootshell to the front.
+    check(page.state()["view"]["screen"] == "pair", "the page while the phone waits for the code", program)
+    started = time.monotonic()
+    news = page.pairing("asked")
+    took = time.monotonic() - started
+    check(news == {"pairing": "asked", "changed": False, "next": "refresh", "code": code,
+                   "notice": f"Code for Settings: {code[:3]} {code[3:]}"} and 11 <= took < 16,
+          f"with no news, the Shortcut heard {news} after {took:.1f} s", program)
+    print(f"ok  while the phone waits for the code, it answers the page, and the Shortcut hears of no news after {took:.0f} s")
+    paired = page.pairing_later("asked")
+    time.sleep(1)
     phone.stdin.write(code + "\n")
     phone.stdin.flush()
     phone.stdout.read()
     check(phone.wait(timeout=30) == 0, f"the phone didn't pair on the page's code: {phone.stderr.read()}", program)
-    print("ok  the page shows the code before the phone asks, and the phone pairs on it")
+    news = paired.get(timeout=10)
+    check(news == {"pairing": "paired", "changed": True, "next": "return"}, f"once paired, the Shortcut heard {news}", program)
+    print("ok  the page shows the code before the phone asks, the phone pairs on it, and the Shortcut hears so")
 
     # Without LocalDevVPN in ifconfig.txt, the page asks for it.
     state = page.wait_for("question", program)
@@ -477,33 +544,70 @@ def page(address, closed):
     state = page.wait_for("stopped", program, seen)
     check(f"pairing service didn't answer at port {closed}" in state["view"]["what"],
           f"why it stopped: {state}", program)
+    # In the web view, it goes on until the Shortcut hears it's over.
+    time.sleep(2)
+    check(program.process.poll() is None, "it ended before the Shortcut heard so", program)
+    check(page.closed() == {"screen": "stopped", "next": "stop"}, "Done once it stopped", program)
     status, said = program.end()
     check(status == 1, f"the run with the page ended with {status}:\n{said}")
+    check("Location Diary" not in said, f"in the web view, it spoke of Location Diary Mode:\n{said}")
     with open(os.path.join(folder, "atelier-install.log")) as log:
         logged = log.read()
     check(key not in logged and f"the page: port {port}" in logged, "the log and the page's key")
     check(key in said, "the terminal didn't say where the page is")
     check("\x1b]777;" not in said, f"it posted notifications over the page:\n{said!r}")
     print("ok  it asks for LocalDevVPN when ifconfig.txt doesn't list it, then stops at the tunnel and says why")
+    # No link back to the Shortcut: rootshell doesn't open one (21 Nov).
+    check("\x1b]8;" not in said and "If the page closed" not in said,
+          f"a link to bring the page back:\n{said!r}")
     print("ok  the page's key is in the terminal, never in the log")
     print("ok  with the page, rootshell posts no notifications")
+    print("ok  in the web view, it goes on until the Shortcut hears it's over, and needs no Location Diary Mode")
 
     # With the pairing kept and LocalDevVPN listed, it goes straight on, to
     # the port Bonjour gives, as the Shortcut gives none.
     with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
         ifconfig.write(IFCONFIG.format(address=address) + LOCAL_DEV_VPN)
     port = random.randint(20000, 29999)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}",
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2",
                       rootshell=bonjour((closed, address)))
     page = Page(port, key)
     seen = []
     state = page.wait_for("stopped", program, seen)
     check("pair" not in seen and "question" not in seen, f"the page showed {seen}", program)
+    check(page.closed() == {"screen": "stopped", "next": "stop"}, "Done once it stopped", program)
     status, said = program.end()
     check(status == 1 and "LocalDevVPN was connected when the Shortcut started" in said
           and f"pairing service didn't answer at port {closed}" in said,
           f"the second run with the page said ({status}):\n{said}")
     print("ok  with the pairing kept and LocalDevVPN listed, the page goes straight on")
+
+    # An earlier Shortcut, which passes no version and opens the page in
+    # Safari: the page says to delete it and add the new one, before
+    # anything else, and the program stops. The terminal says the same.
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}",
+                      rootshell=bonjour((closed, address)))
+    page = Page(port, key)
+    status, html = page.ask("GET", "/")
+    check(status == 200 and b'<html lang="en">' in html and b'<template id="earlier-shortcut">' in html,
+          "the page for an earlier Shortcut, in Safari", program)
+    seen = []
+    page.wait_for("earlier-shortcut", program, seen)
+    check(seen == ["earlier-shortcut"], f"for an earlier Shortcut, the page showed {seen}", program)
+    status, said = program.end()
+    check(status == 1 and "This Install Atelier Shortcut is an earlier one" in said
+          and "touch and hold Install Atelier, then tap Delete" in said
+          and "If you also have Install Atelier 2, delete it too" in said
+          and "atelierstore.app/apple-id" in said and "LocalDevVPN" not in said,
+          f"for an earlier Shortcut, it said ({status}):\n{said}")
+    with open(os.path.join(folder, "atelier-install.log")) as log:
+        logged = log.read()
+    check("Shortcut version 1, in Safari" in logged and "an earlier Shortcut" in logged,
+          f"the log for an earlier Shortcut:\n{logged}")
+    check("tunnel" not in logged.lower() and "LocalDevVPN" not in logged,
+          f"for an earlier Shortcut, it went on:\n{logged}")
+    print("ok  an earlier Shortcut hears to delete it and add the new one, and nothing else happens")
     shutil.rmtree(folder)
 
     # Stop the installer, from the page: it answers with the ended screen,
@@ -512,17 +616,102 @@ def page(address, closed):
     with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
         ifconfig.write(IFCONFIG.format(address=address))
     port = random.randint(20000, 29999)
-    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--port", closed)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed)
     page = Page(port, key)
     page.wait_for("pair", program)
     check(page.ask("POST", "/stop", body=b"")[0] == 403, "a stop without the key", program)
     status, body = page.ask("POST", "/stop", body=b"", headers={"X-Atelier-Key": key})
     check(status == 200 and json.loads(body)["view"]["screen"] == "ended",
           f"the stop's answer: {status} {body!r}", program)
+    time.sleep(1)
+    check(program.process.poll() is None, "stopped from the web view, it ended before the Shortcut heard so", program)
+    check(page.closed() == {"screen": "ended", "next": "stop"}, "Done once stopped", program)
     status, said = program.end()
     check(status == 0 and "Stopped from the page" in said,
           f"after the page's stop, it said ({status}):\n{said}")
-    print("ok  the page's Stop ends the installer, after answering with the ended screen")
+    print("ok  the page's Stop ends the installer, after answering with the ended screen, and the Shortcut")
+    shutil.rmtree(folder)
+
+    step_aside(address, closed, key)
+
+
+def step_aside(address, closed, key):
+    """A new run asks the run still going with the page to stop, as the
+    Shortcut's line does first, with the word that run noted in
+    .atelier/running rather than the page's key. The run says so in its tab
+    and ends; the new one goes on. A run with the page asks too, as it
+    starts. A note nobody answers for goes, and nothing is said."""
+    folder = tempfile.mkdtemp(prefix="atelier-install-step-aside-")
+    with open(os.path.join(folder, "ifconfig.txt"), "w") as ifconfig:
+        ifconfig.write(IFCONFIG.format(address=address))
+    running = os.path.join(folder, ".atelier", "running")
+    log = os.path.join(folder, "atelier-install.log")
+
+    status, said = run(folder, "--step-aside")
+    check(status == 0 and said == "", f"with no run going, --step-aside said ({status}):\n{said}")
+
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed)
+    page = Page(port, key)
+    page.wait_for("pair", program)
+    with open(running) as noted:
+        noted_port, word = noted.read().split()
+    check(int(noted_port) == port and re.fullmatch(r"[0-9a-f]{32}", word), f"the note: {noted_port} {word}", program)
+    for headers, host in [({"X-Atelier-Key": key}, None),
+                          ({"X-Atelier-Step-Aside": word[:-1] + "x"}, None),
+                          ({"X-Atelier-Step-Aside": word}, f"atelier.example:{port}")]:
+        check(page.ask("POST", "/step-aside", body=b"", headers=headers, host=host)[0] == 403,
+              f"a step aside with {headers} under {host}", program)
+    check(program.process.poll() is None and os.path.exists(running), "it stopped for the wrong word", program)
+    print("ok  the run with the page notes its own word, and stops for nobody without it")
+
+    status, said = run(folder, "--step-aside")
+    check(status == 0 and "The last run was still going in another tab. It has stopped, and this\n"
+          "one goes on from where it was." in said, f"--step-aside said ({status}):\n{said}", program)
+    status, first = program.end()
+    check(status == 0 and "A new run of the installer started in another tab, so this one stops here.\n"
+          "The new one goes on from where it was." in first, f"the run asked to stop said ({status}):\n{first}")
+    check(not os.path.exists(running), "the note stayed once the run stopped")
+    with open(log) as kept:
+        logged = kept.read()
+    check("the page: a new run asked this one to stop" in logged and word not in logged and key not in logged,
+          f"the stopped run's log:\n{logged}")
+    print("ok  --step-aside stops the run going with the page, which says so, and waits for it to end")
+
+    # A run with the page that starts while one is going: it asks too.
+    port = random.randint(20000, 29999)
+    program = Program(folder, "--page", f"http://127.0.0.1:{port}/#{key}", "--shortcut", "2", "--port", closed)
+    page = Page(port, key)
+    page.wait_for("pair", program)
+    other = random.randint(20000, 29999)
+    while other == port:
+        other = random.randint(20000, 29999)
+    second = Program(folder, "--page", f"http://127.0.0.1:{other}/#{key}", "--shortcut", "2", "--port", closed)
+    second.wait_for(r"The last run was still going in another tab", "that it stopped the run going")
+    status, first = program.end()
+    check(status == 0 and "A new run of the installer started in another tab" in first,
+          f"the first run said ({status}):\n{first}", second)
+    Page(other, key).wait_for("pair", second)
+    with open(running) as noted:
+        check(noted.read().split()[0] == str(other), "the new run didn't note itself", second)
+    with open(log) as kept:
+        check("a run with the page was still going in another tab: it stopped" in kept.read(),
+              "the new run's log", second)
+    status, _ = Page(other, key).ask("POST", "/stop", body=b"", headers={"X-Atelier-Key": key})
+    check(status == 200 and Page(other, key).closed()["next"] == "stop", "the second run's stop", second)
+    status, said = second.end()
+    check(status == 0 and "Stopped from the page" in said, f"the second run said ({status}):\n{said}")
+    check(not os.path.exists(running), "the note stayed once the run was stopped from the page")
+    print("ok  a run with the page stops the one going as it starts, and its note goes as it ends")
+
+    # A note a stopped run left (Control-C, or rootshell quit): nothing
+    # answers at its port, so it goes, and nothing is said.
+    with open(running, "w") as stale:
+        stale.write(f"{closed_port()} 0123456789abcdef0123456789abcdef\n")
+    status, said = run(folder, "--step-aside")
+    check(status == 0 and said == "" and not os.path.exists(running),
+          f"with a note nobody answers for, --step-aside said ({status}):\n{said}")
+    print("ok  a note a stopped run left goes, and nothing is said")
     shutil.rmtree(folder)
 
 

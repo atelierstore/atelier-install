@@ -68,7 +68,7 @@
     shown = state;
     if (changed) bringIntoView(view.screen === "done" ? step4 : step3);
     sending = false;
-    if (view.screen === "done" || view.screen === "stopped" || view.screen === "ended") over = true;
+    if (["done", "stopped", "ended", "earlier-shortcut"].includes(view.screen)) over = true;
     stop.hidden = over;
   }
 

@@ -124,7 +124,7 @@ fn kept_or_download(state: &State, link: &str) -> Result<PathBuf, Stop> {
     state.forget_download();
     let path = download(state, link)?;
     // Only once it's all there.
-    let _ = fs::write(state.download_link(), link);
+    let _ = state::write_new(&state.download_link(), link.as_bytes());
     Ok(path)
 }
 

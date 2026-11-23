@@ -15,9 +15,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use idevice::remote_pairing::{PairableHost, PairableHostInfo, RpPairingFile, RpPairingSocket};
 
 use crate::blocking::{self, Blocking};
-use crate::door::Door;
+use crate::door::{Door, Visitor};
 use crate::net::{self, Listener};
-use crate::page::{self, View};
+use crate::page::{self, View, spaced};
 use crate::state::{self, State};
 use crate::terminal::{self, Stop};
 use crate::{address, mdns};
@@ -40,6 +40,9 @@ const ANNOUNCEMENTS: u32 = 3;
 /// How often the pairing looks for the iPhone's connection while it
 /// answers the page.
 const LOOK_EVERY: Duration = Duration::from_millis(300);
+/// How long a read of the iPhone's waits during pair-setup, before the page
+/// and the Shortcut are answered, and it waits again.
+const PATIENCE: Duration = Duration::from_secs(1);
 
 pub struct Pairing {
     pub file: RpPairingFile,
@@ -122,12 +125,17 @@ pub fn pair(state: &State, address: Option<&str>) -> Result<Pairing, Stop> {
         "  2. Scroll down and tap \"Pair with {DISPLAY_NAME}\"."
     ));
     terminal::say("  3. Enter your passcode, then the code that will show here.");
-    terminal::say("Leave rootshell running meanwhile. It keeps going behind Settings");
-    if net::has_177_calls() {
-        terminal::say("with Location Diary Mode on, in its Settings › General.");
-    } else {
-        terminal::say("with Location Diary Mode on and set to Session Only, in its");
-        terminal::say("Settings › General.");
+    // In the Shortcut's web view, the Shortcut keeps rootshell going: it
+    // brings it to the front whenever the program has no news for it
+    // (`page.rs`).
+    if !page::in_web_view() {
+        terminal::say("Leave rootshell running meanwhile. It keeps going behind Settings");
+        if net::has_177_calls() {
+            terminal::say("with Location Diary Mode on, in its Settings › General.");
+        } else {
+            terminal::say("with Location Diary Mode on and set to Session Only, in its");
+            terminal::say("Settings › General.");
+        }
     }
     terminal::say(format!(
         "The entry stays in Settings for {} minutes.",
@@ -247,15 +255,52 @@ fn announce(host: &mdns::Host) -> Result<(), Stop> {
 }
 
 /// The iPhone's connection, answering the page until it comes.
-fn next_on_page(door: &mut Door) -> io::Result<crate::door::Visitor> {
+fn next_on_page(door: &mut Door) -> io::Result<Patient> {
     loop {
         page::tick();
         if let Some(visitor) = door.next()? {
-            // Pair-setup waits for the code typed in Settings.
-            visitor.set_read_limit(None)?;
-            return Ok(visitor);
+            // Pair-setup waits for the code typed in Settings, however long
+            // that takes: a second at a time.
+            visitor.set_read_limit(Some(PATIENCE))?;
+            return Ok(Patient(visitor));
         }
         std::thread::sleep(LOOK_EVERY);
+    }
+}
+
+/// The iPhone's connection during pair-setup, which waits for the code
+/// typed in Settings. Between two reads that waited [`PATIENCE`] in vain,
+/// it answers the page, and the Shortcut's question about pairing: the
+/// Shortcut brings rootshell to the front on no news, before it pauses.
+/// Before rootshell 1.0.16-177, a read waits however long.
+#[derive(Debug)]
+struct Patient(Visitor);
+
+impl Read for Patient {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match self.0.read(buf) {
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    page::tick();
+                }
+                other => return other,
+            }
+        }
+    }
+}
+
+impl Write for Patient {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.flush()
     }
 }
 
@@ -277,9 +322,12 @@ where
             PairableHost::new(RpPairingSocket::new_device(Blocking(stream)), info.clone());
         let outcome = blocking::run(host.accept(identity, |code| {
             code_shown.set(true);
-            // A code chosen in advance was shown already, with the page.
+            // A code chosen in advance was shown already, with the page,
+            // and the Shortcut shows it in a notification now.
             if info.setup_code.is_none() {
                 show_code("Code for Settings", &code);
+            } else {
+                page::pairing_asked();
             }
             async {}
         }));
@@ -327,14 +375,6 @@ fn show_code(what: &str, code: &str) {
     let code = spaced(code);
     println!("    {what}: {code}");
     terminal::notify(&format!("{what}: {code}"));
-}
-
-/// A 6-digit code as people read one: "123 456".
-fn spaced(code: &str) -> String {
-    match code.len() {
-        6 if code.is_ascii() => format!("{} {}", &code[..3], &code[3..]),
-        _ => code.to_string(),
-    }
 }
 
 /// The code the pairing goes by on the page: 6 digits, as idevice makes

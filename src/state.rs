@@ -11,8 +11,13 @@
 //! | What the sign-in waits for, and what stopped runs waited for | `anisette/trying`, `anisette/stalled` | a sign-in goes through |
 //! | The IPA, unpacked and signed | `work/` | the install's done (kept.rs) |
 //! | A downloaded IPA, and its link | `download.ipa`, `download.link` | the install's done |
+//! | The run going with the page: its page's port and a word of its own | `running` | the run ends (running.rs) |
 //! | What was signed, and what the app takes | `install.plist` | the install's done (kept.rs) |
 //! | The certificate and the sign-in the app takes | `install-signing.plist` | the app has them (kept.rs) |
+//!
+//! Each file is written whole or not at all (`write_new`), so that a run
+//! stopped at any moment leaves what it kept for the next one to go on
+//! from.
 //!
 //! Apple's codes are never written here, nor is the Apple ID's password,
 //! but for an app that takes the sign-in, such as Atelier: from the signing
@@ -40,11 +45,22 @@ pub struct State {
 impl State {
     /// `$ATELIER_HOME`, or `.atelier` in the home folder: rootshell's.
     pub fn open() -> io::Result<State> {
+        State::open_in(State::find().folder)
+    }
+
+    /// The same folder, as it is, for a look that changes nothing in it:
+    /// another run may be writing there (running.rs).
+    pub fn find() -> State {
         let folder = match std::env::var_os("ATELIER_HOME") {
             Some(folder) => PathBuf::from(folder),
             None => files_folder().join(".atelier"),
         };
+        State { folder }
+    }
+
+    fn open_in(folder: PathBuf) -> io::Result<State> {
         fs::create_dir_all(&folder)?;
+        finish_writes(&folder, &folder.join("work"));
         Ok(State { folder })
     }
 
@@ -55,6 +71,11 @@ impl State {
 
     pub fn pairing(&self) -> PathBuf {
         self.folder.join("pairing.plist")
+    }
+
+    /// The run going with the page, while one is (running.rs).
+    pub fn running(&self) -> PathBuf {
+        self.folder.join("running")
     }
 
     /// The pairing service's port, when one worked before.
@@ -68,7 +89,7 @@ impl State {
     }
 
     pub fn set_port(&self, port: u16) {
-        let _ = fs::write(self.folder.join("port"), port.to_string());
+        let _ = write_new(&self.folder.join("port"), port.to_string().as_bytes());
     }
 
     /// isideload's storage: the signing key.
@@ -103,7 +124,7 @@ impl State {
     pub fn set_last_server(&self, url: &str) {
         let folder = self.folder.join("anisette");
         let _ = fs::create_dir_all(&folder);
-        let _ = fs::write(folder.join("last"), url);
+        let _ = write_new(&folder.join("last"), url.as_bytes());
     }
 
     /// Notes that the sign-in is waiting for `url`. rootshell's
@@ -112,7 +133,7 @@ impl State {
     pub fn set_trying(&self, url: &str) {
         let folder = self.folder.join("anisette");
         let _ = fs::create_dir_all(&folder);
-        let _ = fs::write(folder.join("trying"), url);
+        let _ = write_new(&folder.join("trying"), url.as_bytes());
     }
 
     /// Notes that what the sign-in waited for has answered.
@@ -139,7 +160,7 @@ impl State {
         if let Some(url) = &last {
             stalled.retain(|stalled| stalled != url);
             stalled.push(url.clone());
-            let _ = fs::write(folder.join("stalled"), stalled.join("\n"));
+            let _ = write_new(&folder.join("stalled"), stalled.join("\n").as_bytes());
             self.done_trying();
         }
         if self.last_server().is_some_and(|url| stalled.contains(&url)) {
@@ -207,10 +228,56 @@ pub fn files_folder() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Writes a file anew: the last copy goes first, so none of it is left.
+/// Writes a kept file anew, whole or not at all, so that a run stopped at
+/// any moment, with Control-C or by iOS, leaves the last copy or the new
+/// one, never part of one. The new copy goes to `<name>.writing`, a fresh
+/// file, so none of an earlier one is left in it; once it's all there, to
+/// `<name>.written`; then over the file. rootshell renames onto a file by
+/// deleting it first (paths.rs), so a run stopped between the two leaves
+/// `<name>.written` alone, whole, and the next run's `State::open` puts it
+/// in place (`finish_writes`).
 pub fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    let _ = fs::remove_file(path);
-    fs::write(path, bytes)
+    let writing = beside(path, WRITING);
+    let written = beside(path, WRITTEN);
+    let _ = fs::remove_file(&writing);
+    fs::write(&writing, bytes)?;
+    fs::rename(&writing, &written)?;
+    fs::rename(&written, path)
+}
+
+/// The ends of `write_new`'s copies, while one is written and once all of
+/// it is.
+const WRITING: &str = ".writing";
+const WRITTEN: &str = ".written";
+
+fn beside(path: &Path, end: &str) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(end);
+    path.with_file_name(name)
+}
+
+/// What a stopped run's `write_new` left: a copy written whole goes in
+/// place, one it hadn't finished goes. `skip` is the work folder, which
+/// holds the signed app's many files and none of these.
+fn finish_writes(folder: &Path, skip: &Path) {
+    let Ok(entries) = fs::read_dir(folder) else {
+        return;
+    };
+    for path in entries.flatten().map(|entry| entry.path()) {
+        if path.is_dir() {
+            if path != skip {
+                finish_writes(&path, skip);
+            }
+            continue;
+        }
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if let Some(kept) = name.strip_suffix(WRITTEN) {
+            let kept = path.with_file_name(kept);
+            let _ = fs::rename(&path, kept);
+        } else if name.ends_with(WRITING) {
+            let _ = fs::remove_file(&path);
+        }
+    }
 }
 
 /// What an Apple ID's sign-in and signing key are kept under: a hash of
@@ -303,10 +370,53 @@ mod tests {
         assert_eq!(state.last_server(), None);
         state.set_last_server("https://a.example");
         assert_eq!(state.last_server().as_deref(), Some("https://a.example"));
-        write_new(&state.pairing(), b"one").unwrap();
+        write_new(&state.pairing(), b"one, the longer").unwrap();
         write_new(&state.pairing(), b"two").unwrap();
         assert_eq!(fs::read(state.pairing()).unwrap(), b"two");
         state.forget().unwrap();
         assert!(!folder.exists());
+    }
+
+    #[test]
+    fn writes_leave_nothing_beside_the_file() {
+        let folder = crate::testing::scratch("write-new");
+        let file = folder.join("pairing.plist");
+        write_new(&file, b"one").unwrap();
+        write_new(&file, b"two").unwrap();
+        let mut names: Vec<_> = fs::read_dir(&folder)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["pairing.plist"]);
+        fs::remove_dir_all(folder).unwrap();
+    }
+
+    #[test]
+    fn the_next_run_finishes_what_a_stopped_one_wrote() {
+        let folder = crate::testing::scratch("finish-writes");
+        let anisette = folder.join("anisette").join("ani.example");
+        let work = folder.join("work");
+        fs::create_dir_all(&anisette).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        // Stopped once the new copy was whole: before the old one went,
+        // and after.
+        fs::write(folder.join("pairing.plist"), "old").unwrap();
+        fs::write(folder.join("pairing.plist.written"), "new").unwrap();
+        fs::write(anisette.join("state.written"), "new").unwrap();
+        // Stopped while writing: the last copy stays.
+        fs::write(folder.join("port"), "49152").unwrap();
+        fs::write(folder.join("port.writing"), "491").unwrap();
+        // The signed app's own, left as they are.
+        fs::write(work.join("Info.plist.written"), "app's").unwrap();
+
+        let state = State::open_in(folder.clone()).unwrap();
+        assert_eq!(fs::read_to_string(state.pairing()).unwrap(), "new");
+        assert!(!folder.join("pairing.plist.written").exists());
+        assert_eq!(fs::read_to_string(anisette.join("state")).unwrap(), "new");
+        assert_eq!(state.port(), Some(49152));
+        assert!(!folder.join("port.writing").exists());
+        assert!(work.join("Info.plist.written").exists());
+        fs::remove_dir_all(folder).unwrap();
     }
 }
