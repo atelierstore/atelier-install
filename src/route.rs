@@ -19,13 +19,18 @@ pub struct Server {
     pub name: String,
     /// A Mac's, Windows' ADI or another; Apple can refuse one kind only.
     pub kind: Option<String>,
+    /// Whether the sign-in sends Apple the client info the server hands
+    /// out rather than the list's: for a server that checks which ones
+    /// Apple takes and picks one itself, as anisette.lillq.me does.
+    pub own_client_info: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct List {
     /// The most servers one sign-in tries.
     pub tries: usize,
-    /// What the servers' machines say they are, when the list says.
+    /// What the sign-in says the machine is, in place of each server's own,
+    /// when the list says: its client info and user agent.
     pub client_info: Option<(String, String)>,
     pub servers: Vec<Server>,
 }
@@ -59,7 +64,16 @@ impl List {
                     .get("kind")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                Some(Server { url, name, kind })
+                let own_client_info = server
+                    .get("ownClientInfo")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                Some(Server {
+                    url,
+                    name,
+                    kind,
+                    own_client_info,
+                })
             })
             .collect();
         if servers.is_empty() {
@@ -92,6 +106,7 @@ impl List {
                 url: url.trim_end_matches('/').to_string(),
                 name: url.to_string(),
                 kind: None,
+                own_client_info: false,
             }],
         }
     }
@@ -218,6 +233,7 @@ mod tests {
                     url: format!("https://s{index}.example"),
                     name: format!("s{index}"),
                     kind: kind.map(str::to_owned),
+                    own_client_info: false,
                 })
                 .collect(),
         }
@@ -236,7 +252,30 @@ mod tests {
         assert!(list.servers.len() > 10);
         let (client_info, user_agent) = list.client_info.unwrap();
         assert!(client_info.contains("com.apple.AuthKit"));
-        assert!(user_agent.starts_with("akd/"));
+        // Apple's sign-in answers HTTP 503 to "macOS" since 20 Nov 2026.
+        assert!(client_info.contains("<Mac OS X;"), "{client_info}");
+        assert!(!client_info.contains("<macOS;"), "{client_info}");
+        assert!(user_agent.contains("com.apple.akd"), "{user_agent}");
+        let own: Vec<&str> = list
+            .servers
+            .iter()
+            .filter(|server| server.own_client_info)
+            .map(|server| server.url.as_str())
+            .collect();
+        assert_eq!(own, ["https://anisette.lillq.me"]);
+    }
+
+    #[test]
+    fn reads_which_servers_pick_their_own_client_info() {
+        let read = List::parse(
+            r#"{"version":1,"servers":[
+                {"url":"https://own.example","ownClientInfo":true},
+                {"url":"https://list.example","ownClientInfo":false},
+                {"url":"https://unsaid.example"}]}"#,
+        )
+        .unwrap();
+        let own: Vec<bool> = read.servers.iter().map(|s| s.own_client_info).collect();
+        assert_eq!(own, [true, false, false]);
     }
 
     #[test]

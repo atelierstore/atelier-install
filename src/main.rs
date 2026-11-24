@@ -42,6 +42,7 @@ mod door;
 mod handoff;
 mod ipa;
 mod kept;
+mod machine;
 mod mdns;
 mod net;
 mod page;

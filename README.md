@@ -41,7 +41,7 @@ Every step runs in one App Store app, as one program. There's no computer at any
 3. **The IPA** (`src/ipa.rs`, `src/source.rs`). It comes from rootshell's folder, a path or an HTTPS link, and is checked against its SHA-256 when you give one. With `--page`, it's Atelier's newest release, from Atelier's source. Its Info.plist gives the bundle ID, the name, the version, and what the app takes.
 4. **The sign-in** (`src/apple.rs`, `src/route.rs`, `src/token.rs`).
    - The program signs in with GrandSlam's SRP, using the Apple ID and password, and Apple's two-factor code when Apple asks for one.
-   - It goes through an anisette v3 server from Atelier's list. Each server's provisioned state is kept, so Apple sees the same machine every time.
+   - It goes through an anisette v3 server from Atelier's list. Each server's provisioned state is kept, so Apple sees the same machine every time, with the client info it was made as (`src/machine.rs`). The sign-in sends the list's client info, or the one the server hands out when the list says the server picks its own. Apple answers a sign-in that sends another client info than its machine was made as with -22410, so when the list's changes, as it did when Apple refused "macOS" on 20 Nov 2026, the program makes a new machine.
    - It then gets the app token for Xcode's developer services, `com.apple.gs.xcode.auth`. The next run signs in with that token, unless the app it installs takes the password.
 5. **The signing** (`src/apple.rs`).
    - Through Xcode's developer services, the program gets the team, registers the iPhone by its UDID, and gets a development certificate (a new one, or one it made before, with the key it kept). It then gets the app's App ID and its provisioning profile, which the app's extensions are signed with too, as Atelier signs them.
@@ -136,7 +136,7 @@ The program keeps the following in `.atelier`, in rootshell's folder, which File
 - the pairing service's port
 - the signing key that Apple made a certificate for
 - Apple's token
-- each anisette server's state
+- each anisette server's state, and the client info it was made as
 - an install that a run stopped before finishing, with the sign-in when the app takes it
 
 `--forget` deletes all of it once you type yes, after saying that the next run then needs a new certificate, which at Apple's limit means revoking one. Each run's steps and errors go to `atelier-install.log` in rootshell's folder, never with the Apple ID, its password or a code.
@@ -212,7 +212,7 @@ Version 2 has Apple's token for Xcode's developer services, `com.apple.gs.xcode.
 | `tokenDuration` | integer | How long it lasts, in seconds, as Apple gave it |
 | `tokenExpiry` | integer | When it ends, as Apple gave it, in a unit Apple doesn't say. The program reads it as milliseconds since 1970 when that's a time from 2001 on, then as seconds, and otherwise goes by `tokenReceived` and `tokenDuration` |
 | `tokenReceived` | date | When the program got it |
-| `clientInfo`, `userAgent` | string | What the sign-in sent Apple in place of the anisette server's client info and user agent, when it did: send the same with the token |
+| `clientInfo`, `userAgent` | string | What the sign-in sent Apple as its client info and user agent, which `anisetteState` was made as: send the same with the token. Since 0.4.1 always there; before, only when Atelier's list gave one in place of the server's |
 
 ## Building and testing
 
