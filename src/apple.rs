@@ -33,6 +33,7 @@ use crate::awake;
 use crate::certificate::{self, Certificate};
 use crate::ipa::Ipa;
 use crate::kept;
+use crate::machine::{self, Readiness};
 use crate::page::{self, Bar, View};
 use crate::route::{self, Failure, List, Route, Server};
 use crate::state::{AppleIdHash, State};
@@ -212,6 +213,62 @@ fn provider(
     .set_client_info_override(client_info))
 }
 
+/// What a sign-in through `server` sends Apple: the list's client info,
+/// unless the server picks its own or the list has none, when it's the one
+/// the server hands out, asked for here so that the sign-in and the note
+/// beside the server's state (machine.rs) are of the same.
+async fn client_info(list: &List, server: &Server) -> Result<(String, String), Report> {
+    if let Some(client_info) = list.client_info.clone().filter(|_| !server.own_client_info) {
+        return Ok(client_info);
+    }
+    #[derive(serde::Deserialize)]
+    struct HandedOut {
+        client_info: String,
+        user_agent: String,
+    }
+    let text = isideload::http::Client::new()
+        .get(format!("{}/v3/client_info", server.url))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let handed: HandedOut = serde_json::from_str(&text)
+        .map_err(|_| report!("The anisette server's client info can't be read"))?;
+    let (client_info, user_agent) = (handed.client_info.trim(), handed.user_agent.trim());
+    if !header_value(client_info) || !header_value(user_agent) {
+        return Err(report!(
+            "The anisette server's client info can't go in a header"
+        ));
+    }
+    Ok((client_info.to_string(), user_agent.to_string()))
+}
+
+/// Printable ASCII, as an HTTP header's value has to be.
+fn header_value(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| (0x20..=0x7e).contains(&byte))
+}
+
+/// Gets `server`'s machine ready for a sign-in that sends `client_info`, a
+/// new one unless the last was made as that, and says so in the log.
+fn ready_machine(state: &State, server: &Server, client_info: &str) -> Result<(), Report> {
+    let what = match machine::ready(&state.anisette(&server.url), client_info)? {
+        Readiness::Kept => "its machine".to_string(),
+        Readiness::New => "a new machine".to_string(),
+        Readiness::Replaced(Some(made)) => format!("a new machine, as the last was made as {made}"),
+        Readiness::Replaced(None) => {
+            "a new machine, as the last was made before its client info was noted".to_string()
+        }
+    };
+    let own = if server.own_client_info {
+        ", the server's own"
+    } else {
+        ""
+    };
+    terminal::log(format!("sign-in: {what}, sending {client_info}{own}"));
+    Ok(())
+}
+
 async fn attempt(
     state: &State,
     list: &List,
@@ -220,7 +277,9 @@ async fn attempt(
     password: &str,
     cancelled: Arc<AtomicBool>,
 ) -> Result<(DeveloperSession, Token), Report> {
-    let provider = provider(state, &server.url, list.client_info.clone())?;
+    let client_info = client_info(list, server).await?;
+    ready_machine(state, server, &client_info.0)?;
+    let provider = provider(state, &server.url, Some(client_info.clone()))?;
     // Apple's answered by the time it asks for a code: a run stopped at
     // the code wasn't stopped waiting for the server.
     let answered = state.clone();
@@ -242,13 +301,7 @@ async fn attempt(
         .and_then(plist::Value::as_string)
         .ok_or_else(|| report!("Apple's sign-in didn't say the account's adsid"))?
         .to_string();
-    let kept = Token::new(
-        &server.url,
-        list.client_info.clone(),
-        &adsid,
-        &token,
-        kept::now(),
-    );
+    let kept = Token::new(&server.url, Some(client_info), &adsid, &token, kept::now());
     let developer = DeveloperSession::new(
         token,
         adsid,
@@ -1003,6 +1056,7 @@ mod tests {
                     url: url.to_string(),
                     name: url.to_string(),
                     kind: None,
+                    own_client_info: false,
                 })
                 .collect(),
         }

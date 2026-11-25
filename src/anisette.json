@@ -1,10 +1,10 @@
 {
 	"version": 1,
-	"updated": "2026-11-02",
+	"updated": "2026-11-24",
 	"tries": 4,
 	"clientInfo": {
-		"clientInfo": "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
-		"userAgent": "akd/1.0 CFNetwork/811.5.4"
+		"clientInfo": "<MacBookPro18,3> <Mac OS X;26.6;25F84> <com.apple.AuthKit/1 (com.apple.akd/1.0)>",
+		"userAgent": "AuthKit/1 (Macintosh; OS X 26.6) (com.apple.akd/1.0)"
 	},
 	"servers": [
 		{
@@ -118,7 +118,8 @@
 		{
 			"url": "https://anisette.lillq.me",
 			"name": "Lill q",
-			"kind": "mac"
+			"kind": "mac",
+			"ownClientInfo": true
 		}
 	]
 }

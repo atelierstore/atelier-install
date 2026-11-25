@@ -7,7 +7,7 @@
 //! | The pairing service's port that worked last | `port` | `--forget` |
 //! | The signing key Apple made a certificate for | `apple/<hash of the Apple ID>/key` | `--forget` |
 //! | Apple's token for the sign-in, not the password | `apple/<hash of the Apple ID>/sign-in.plist` | Apple refuses it, it nears its end, or `--forget` (token.rs) |
-//! | Each anisette server's state, and the one that worked last | `anisette/` | `--forget` |
+//! | Each anisette server's state, the client info it was made as (machine.rs), and the one that worked last | `anisette/` | `--forget` |
 //! | What the sign-in waits for, and what stopped runs waited for | `anisette/trying`, `anisette/stalled` | a sign-in goes through |
 //! | The IPA, unpacked and signed | `work/` | the install's done (kept.rs) |
 //! | A downloaded IPA, and its link | `download.ipa`, `download.link` | the install's done |
